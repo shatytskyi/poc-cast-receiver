@@ -45,6 +45,10 @@
             padding: 0 4.5%;                         /* horizontal only → video flush to the top */
             background: radial-gradient(120% 95% at 50% 28%, #2c323f 0%, #14161d 56%, #000 100%);
         }
+        /* Kill the native video controls bar that the platform flashes on pause/unpause. */
+        #video::-webkit-media-controls,
+        #video::-webkit-media-controls-enclosure,
+        #video::-webkit-media-controls-panel { display: none !important; -webkit-appearance: none !important; }
         #video {
             grid-column: 2; justify-self: center; align-self: start;   /* flush to the top */
             /* Explicit vh height + aspect-ratio is the combo that actually RENDERS on the dongle.
@@ -77,6 +81,8 @@
             stroke-dasharray: 289; stroke-dashoffset: 0; transition: stroke-dashoffset 950ms linear;
         }
         .timer .value { font-size: clamp(28px, 5vw, 54px); font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+        .timer .value.label { font-size: clamp(20px, 3vw, 34px); font-weight: 700; letter-spacing: 0.04em; }
+        .timer.no-ring svg { display: none; }
         .right.hide-timer .timer { display: none; }
 
         /* Segmented progress */
@@ -131,7 +137,6 @@
         </div>
 
         <div class="panel right" id="rightPanel">
-            <p class="eyebrow" id="rightEyebrow">Time left</p>
             <div class="timer">
                 <svg viewBox="0 0 100 100" aria-hidden="true">
                     <circle class="track" cx="50" cy="50" r="46"></circle>
@@ -171,7 +176,8 @@
         const screenEl = el('stage');
         const chipEl = el('chip'), idleEl = el('idle'), progressEl = el('progress');
         const leftEyebrow = el('leftEyebrow'), leftTitle = el('leftTitle'), leftSub = el('leftSub');
-        const rightPanel = el('rightPanel'), rightEyebrow = el('rightEyebrow'), timerValue = el('timerValue'), ring = el('ring');
+        const rightPanel = el('rightPanel'), timerValue = el('timerValue'), ring = el('ring');
+        const timerEl = document.querySelector('.timer');
         const countdownEl = el('countdown'), cdNum = el('cdNum');
         const cardEl = el('card'), cardLabel = el('cardLabel'), cardTitle = el('cardTitle'), cardHint = el('cardHint'), cardHintText = el('cardHintText');
 
@@ -213,28 +219,45 @@
         }
 
         function renderPanels(d) {
-            let eyebrow = '', title = '', sub = '', showTimer = false;
+            let eyebrow = '', title = '', sub = '';
+            let rightMode = 'hidden', rightLabel = '';
             const num = (d.exerciseNumber && d.exerciseCount) ? 'Exercise ' + d.exerciseNumber + ' of ' + d.exerciseCount : '';
             switch (d.phase) {
                 case 'exerciseActive':
-                    eyebrow = num; title = d.title || ''; sub = d.nextTitle ? 'Next up · ' + d.nextTitle : ''; showTimer = true; break;
+                    eyebrow = num; title = d.title || ''; sub = d.nextTitle ? 'Next up · ' + d.nextTitle : ''; rightMode = 'timer'; break;
                 case 'exercisePreview':
                     eyebrow = 'Up next'; title = d.title || ''; break;
                 case 'exerciseRest':
-                    eyebrow = 'Rest · next up'; title = d.nextTitle || d.title || ''; sub = 'Catch your breath'; showTimer = true; break;
+                    eyebrow = 'Rest · next up'; title = d.nextTitle || d.title || ''; sub = 'Catch your breath'; rightMode = 'timer'; break;
                 case 'intro':
                     // Keep the intro VIDEO visible — show the prompt beside it, not over it.
-                    eyebrow = 'Get started'; title = d.workoutTitle || 'Workout'; sub = 'Press Start on your phone'; break;
+                    eyebrow = 'Get started'; title = d.workoutTitle || 'Workout'; sub = 'Press Start on your phone';
+                    rightMode = 'label'; rightLabel = 'Intro'; break;
                 case 'outro':
-                    eyebrow = 'Almost done'; title = d.workoutTitle || ''; sub = 'Tap Complete on your phone'; break;
+                    eyebrow = 'Almost done'; title = d.workoutTitle || ''; sub = 'Tap Complete on your phone';
+                    rightMode = 'label'; rightLabel = 'Outro'; break;
                 default:
                     break; // completed renders as a card overlay
             }
             leftEyebrow.textContent = eyebrow;
             leftTitle.textContent = title;
             leftSub.textContent = sub;
-            rightPanel.classList.toggle('hide-timer', !showTimer);
-            if (showTimer) setTimerRing(d);
+            applyRight(rightMode, rightLabel, d);
+        }
+
+        // Right panel: 'timer' = ring + mm:ss, 'label' = a word (Intro/Outro) with no ring, 'hidden' = nothing.
+        function applyRight(mode, label, d) {
+            if (mode === 'hidden') { rightPanel.classList.add('hide-timer'); return; }
+            rightPanel.classList.remove('hide-timer');
+            if (mode === 'timer') {
+                timerEl.classList.remove('no-ring');
+                timerValue.classList.remove('label');
+                setTimerRing(d);
+            } else {
+                timerEl.classList.add('no-ring');
+                timerValue.classList.add('label');
+                timerValue.textContent = label;
+            }
         }
 
         function renderCard(d) {
