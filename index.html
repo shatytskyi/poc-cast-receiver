@@ -2,13 +2,21 @@
 <!--
   MA-4513 — Custom Web Receiver.
 
-  M1: plays whatever HLS the sender loads (useShakaForHls = true — robust HLS, same as Harna).
-  M3a: also renders a MINIMAL overlay (exercise title + timer) driven by messages the phone pushes
-       on urn:x-cast:com.amomedia.musclemate.reboot. This proves the state channel end-to-end; the
-       full custom UI (ambient panels, countdown, progress, rest / "continue on phone" cards) is M3b.
+  M1: plays the workout HLS (useShakaForHls = true — robust HLS, same as Harna).
+  M3a: renders a minimal overlay (title + timer) from the phone's reboot channel.
+  M3b (foundation): FULL custom UI — drops the built-in <cast-media-player> chrome (incl. the default
+       seekbar) in favour of our own <video class="castMediaElement"> + custom DOM, per the Cast
+       "Custom UI data binding" path. Vertical (9:16) video is centred/pillarboxed; the side areas
+       show a static frosted-dark ambient (sampled-from-video colour is a later step). Overlay: title
+       (top), timer (bottom), a thin progress bar (from native media position), "Get ready" on the
+       3-2-1 countdown. Clean dark POC look + Reboot orange accent.
+       Next M3b steps: ambient colour sampled from the video, on-TV 3-2-1 numbers, rest card,
+       "continue on your phone" cards for action gates.
 
-  Deploy: host this single file on GitHub Pages, register the URL as a Custom Receiver in the Cast
-  Developer Console, and point app/src/main/res/values/cast.xml (cast_receiver_app_id) at it.
+  Channel (phone → TV): urn:x-cast:com.amomedia.musclemate.reboot, payload = CastOverlayMessage.
+
+  Deploy: GitHub Pages → registered Custom Receiver `95AE9DBA`; end+restart the cast session to pull
+  a fresh build.
 -->
 <html>
 <head>
@@ -16,50 +24,100 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MadMuscles Reboot Receiver</title>
     <style>
-        html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, Roboto, Arial, sans-serif; }
-        cast-media-player { --background-color: #000; width: 100%; height: 100%; }
+        :root {
+            --accent: #ff6a00;          /* Reboot orange */
+            --text: #ffffff;
+            --text-dim: rgba(255, 255, 255, 0.65);
+        }
+        html, body {
+            margin: 0; height: 100%; overflow: hidden;
+            background: #000; color: var(--text);
+            font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+        }
 
-        /* Overlay layer sits above the video and never eats input (the phone is the controller). */
+        /* Ambient backdrop behind the pillarboxed video. Static frosted-dark for now; a colour
+           sampled from the video is a later M3b step. */
+        #stage {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            background:
+                radial-gradient(120% 90% at 50% 30%, #2a2f3a 0%, #14161c 55%, #000 100%);
+        }
+
+        /* The real video, sized to its own aspect so a 9:16 source shows full-height and narrow,
+           letting the ambient backdrop fill the sides. No default controls — we draw our own. */
+        #video {
+            height: 100%; width: auto; max-width: 100%;
+            background: #000;
+        }
+
+        /* Overlay never eats input — the phone is the controller. 10% overscan-safe inset. */
         #overlay {
             position: absolute; inset: 0; pointer-events: none;
             display: flex; flex-direction: column; align-items: center; justify-content: space-between;
-            padding: 6vh 4vw; box-sizing: border-box;
-            opacity: 0; transition: opacity 200ms ease;
-            text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+            padding: 6vh 5vw; box-sizing: border-box;
+            text-shadow: 0 2px 16px rgba(0, 0, 0, 0.7);
+            opacity: 0; transition: opacity 220ms ease;
         }
         #overlay.visible { opacity: 1; }
 
         #title {
-            color: #fff; font-size: 3.2vh; font-weight: 600; text-align: center;
-            max-width: 80vw; line-height: 1.2;
+            font-size: 3.4vh; font-weight: 600; text-align: center;
+            max-width: 70vw; line-height: 1.25; letter-spacing: 0.2px;
         }
-        #center { display: flex; flex-direction: column; align-items: center; gap: 1.5vh; }
-        #timer { color: #fff; font-size: 9vh; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+        #center { display: flex; flex-direction: column; align-items: center; gap: 1.6vh; }
         #badge {
-            color: #fff; font-size: 2.4vh; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase;
-            padding: 1vh 3vw; border-radius: 999px; background: rgba(255,255,255,0.18);
-            display: none;
+            font-size: 2.2vh; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+            color: #fff; background: rgba(255, 106, 0, 0.92);
+            padding: 1.1vh 3vw; border-radius: 999px; display: none;
         }
         #badge.visible { display: block; }
-        #footer { height: 3vh; } /* spacer to balance the column */
+        #timer {
+            font-size: 11vh; font-weight: 800; font-variant-numeric: tabular-nums;
+            line-height: 1; display: none;
+        }
+        #timer.visible { display: block; }
+
+        /* Bottom progress bar — overall position in the workout video (native media time). */
+        #progressTrack {
+            width: 100%; height: 0.7vh; border-radius: 999px;
+            background: rgba(255, 255, 255, 0.22); overflow: hidden;
+        }
+        #progressFill {
+            height: 100%; width: 0%; background: var(--accent);
+            border-radius: 999px; transition: width 240ms linear;
+        }
+
+        /* Idle hint before any media loads. */
+        #idle {
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            color: var(--text-dim); font-size: 3vh; letter-spacing: 0.04em;
+        }
+        #idle.hidden { display: none; }
     </style>
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script src="//www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
 </head>
 <body>
-    <cast-media-player></cast-media-player>
+    <div id="stage">
+        <video id="video" class="castMediaElement" playsinline></video>
+    </div>
 
     <div id="overlay">
         <div id="title"></div>
         <div id="center">
-            <div id="badge"></div>
+            <div id="badge">Get ready</div>
             <div id="timer"></div>
         </div>
-        <div id="footer"></div>
+        <div id="progressTrack"><div id="progressFill"></div></div>
     </div>
+
+    <div id="idle">MadMuscles</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
+        const OVERLAY_PHASES = ['exercisePreview', 'exerciseActive', 'exerciseRest'];
 
         const context = cast.framework.CastReceiverContext.getInstance();
         const playerManager = context.getPlayerManager();
@@ -71,31 +129,36 @@
         const titleEl = document.getElementById('title');
         const timerEl = document.getElementById('timer');
         const badgeEl = document.getElementById('badge');
-
-        // Phases where we show our overlay text. intro/outro/completed are handled by the phone for
-        // now (M3a), so we keep the TV clean there.
-        const OVERLAY_PHASES = ['exercisePreview', 'exerciseActive', 'exerciseRest'];
+        const progressFillEl = document.getElementById('progressFill');
+        const idleEl = document.getElementById('idle');
 
         function applyOverlay(d) {
             if (!d || d.type !== 'overlay') return;
+            idleEl.classList.add('hidden');
 
-            const showOverlay = OVERLAY_PHASES.indexOf(d.phase) !== -1 || d.isCountdown;
-            overlayEl.classList.toggle('visible', showOverlay);
+            const showText = OVERLAY_PHASES.indexOf(d.phase) !== -1 || d.isCountdown;
+            overlayEl.classList.toggle('visible', showText);
 
             titleEl.textContent = d.phase === 'exerciseRest' ? 'Rest' : (d.title || '');
-            timerEl.textContent = d.timer || '';
 
-            if (d.isCountdown) {
-                badgeEl.textContent = 'Get ready';
-                badgeEl.classList.add('visible');
-            } else {
-                badgeEl.classList.remove('visible');
+            const hasTimer = !!d.timer && !d.isCountdown;
+            timerEl.textContent = d.timer || '';
+            timerEl.classList.toggle('visible', hasTimer);
+
+            badgeEl.classList.toggle('visible', !!d.isCountdown);
+        }
+
+        // Overall progress from the receiver's own media clock (no protocol change needed).
+        function updateProgress() {
+            const duration = playerManager.getDurationSec();
+            const current = playerManager.getCurrentTimeSec();
+            if (duration && duration > 0) {
+                const pct = Math.max(0, Math.min(100, (current / duration) * 100));
+                progressFillEl.style.width = pct + '%';
             }
         }
 
         context.addCustomMessageListener(NAMESPACE, (event) => {
-            // CAF delivers the message in event.data — already parsed when it is valid JSON, but be
-            // defensive and parse strings too.
             let data = event.data;
             if (typeof data === 'string') {
                 try { data = JSON.parse(data); } catch (e) { castDebugLogger.warn('Reboot', 'bad msg: ' + event.data); return; }
@@ -104,6 +167,11 @@
             applyOverlay(data);
         });
 
+        playerManager.addEventListener(cast.framework.events.EventType.TIME_UPDATE, updateProgress);
+        playerManager.addEventListener(cast.framework.events.EventType.MEDIA_FINISHED, () => {
+            overlayEl.classList.remove('visible');
+            idleEl.classList.remove('hidden');
+        });
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
             castDebugLogger.error('Reboot', 'player error: ' + JSON.stringify(event));
         });
