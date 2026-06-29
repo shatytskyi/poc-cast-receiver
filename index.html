@@ -27,8 +27,8 @@
             --text: #f3f4f7;
             --dim: rgba(243,244,247,0.6);
             --faint: rgba(243,244,247,0.32);
-            --gap: 1.6vh;        /* offset of the bottom progress bar from the screen edge */
-            --video-gap: 2vh;    /* breathing room above the video, mirroring the gap below it */
+            --gap: 1.6vh;        /* offset of the progress bar from the top screen edge */
+            --video-gap: 4vh;    /* double gap above the video — clears the top progress bar; single 2vh below */
         }
         * { box-sizing: border-box; }
         html, body {
@@ -52,10 +52,10 @@
         #video::-webkit-media-controls-panel { display: none !important; -webkit-appearance: none !important; }
         #video {
             grid-column: 2; justify-self: center; align-self: start;
-            margin-top: var(--video-gap);   /* same top gap as below, down to the progress bar */
+            margin-top: var(--video-gap);   /* double gap on top (room for the top progress bar) */
             /* Explicit vh height + aspect-ratio is the combo that actually RENDERS on the dongle.
                (height:100% of a grid track, or width:auto without an aspect, left the video black.)
-               94vh + the 2vh top gap = the old 96vh bottom, so the gap to the progress bar is unchanged. */
+               4vh top + 94vh height = 98vh, leaving a single 2vh gap at the bottom. */
             height: 94vh; aspect-ratio: 9 / 16; max-width: 100%;
             background: #000; border-radius: 10px;
             box-shadow: 0 10px 44px -10px rgba(0,0,0,0.75);
@@ -341,21 +341,21 @@
             applyOverlay(data);
         });
 
-        // Apply the phone's audio rendition once Shaka has the manifest: prefer a label already
-        // requested over the channel, else the one passed in load customData.
+        // Buffering spinner driven by CAF PlayerManager events (reliable for the initial load too,
+        // unlike the HTML5 <video> events which Shaka/MSE doesn't surface consistently).
+        const spinnerEl = el('spinner');
+        const setBuffering = (on) => spinnerEl.classList.toggle('show', !!on);
+        playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOADING, () => setBuffering(true));
+        playerManager.addEventListener(cast.framework.events.EventType.BUFFERING, (event) => setBuffering(!!event.isBuffering));
+
+        // Apply the phone's audio rendition once Shaka has the manifest, and clear the load spinner:
+        // prefer a label already requested over the channel, else the one passed in load customData.
         playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
             const info = playerManager.getMediaInformation && playerManager.getMediaInformation();
             const fromLoad = info && info.customData && info.customData.audio;
             applyAudioLabel(desiredAudioLabel || fromLoad);
+            setBuffering(false);
         });
-
-        // Buffering spinner: HTML5 media events fire on the custom <video> even though Shaka drives
-        // playback, so we show a spinner while the stream (re)buffers or seeks instead of a frozen frame.
-        const spinnerEl = el('spinner');
-        const videoEl = el('video');
-        const setBuffering = (on) => spinnerEl.classList.toggle('show', !!on);
-        ['waiting', 'seeking', 'loadstart'].forEach((e) => videoEl.addEventListener(e, () => setBuffering(true)));
-        ['playing', 'seeked', 'canplaythrough', 'pause', 'ended'].forEach((e) => videoEl.addEventListener(e, () => setBuffering(false)));
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
             castDebugLogger.error('Reboot', 'player error: ' + JSON.stringify(event));
