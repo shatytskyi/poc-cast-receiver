@@ -296,12 +296,43 @@
             if (isCard) renderCard(d);
         }
 
+        // Audio rendition (language + music/voice) the phone wants on the TV. Stored so a switch
+        // requested before Shaka has parsed the manifest is applied once PLAYER_LOAD_COMPLETE fires.
+        let desiredAudioLabel = null;
+        function applyAudioLabel(label) {
+            if (!label) return;
+            desiredAudioLabel = label;
+            const shaka = playerManager.getShakaPlayer && playerManager.getShakaPlayer();
+            if (!shaka) return;   // not ready yet — PLAYER_LOAD_COMPLETE retries with desiredAudioLabel
+            try {
+                // Shaka matches the HLS rendition by its NAME/label; clearBuffer=true swaps instantly.
+                shaka.selectVariantsByLabel(label, true);
+                // Fallback for manifests that surface the rendition NAME as originalAudioId, not label.
+                const tracks = shaka.getVariantTracks();
+                if (!tracks.some(t => t.label === label && t.active)) {
+                    const byId = tracks.find(t => t.originalAudioId === label);
+                    if (byId) shaka.selectVariantTrack(byId, true);
+                }
+            } catch (e) {
+                castDebugLogger.warn('Reboot', 'audio switch failed for "' + label + '": ' + e);
+            }
+        }
+
         context.addCustomMessageListener(NAMESPACE, (event) => {
             let data = event.data;
             if (typeof data === 'string') {
                 try { data = JSON.parse(data); } catch (e) { castDebugLogger.warn('Reboot', 'bad msg: ' + event.data); return; }
             }
+            if (data && data.type === 'audioTrack') { applyAudioLabel(data.audio); return; }
             applyOverlay(data);
+        });
+
+        // Apply the phone's audio rendition once Shaka has the manifest: prefer a label already
+        // requested over the channel, else the one passed in load customData.
+        playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
+            const info = playerManager.getMediaInformation && playerManager.getMediaInformation();
+            const fromLoad = info && info.customData && info.customData.audio;
+            applyAudioLabel(desiredAudioLabel || fromLoad);
         });
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
