@@ -114,7 +114,12 @@
             box-shadow: 0 10px 44px -10px rgba(0,0,0,0.75);
             transition: opacity 320ms ease, transform 320ms ease;
         }
-        .screen[data-phase="exerciseRest"] #video { opacity: 0.4; transform: scale(0.92); }
+        /* TEMP A/B (MA-4513): rest video dim REMOVED. The logcat heartbeat proved JS keeps running through
+           rest, so the freeze is a PAINT stall, not a JS block. Prime suspect: a translucent (opacity:0.4)
+           PLAYING video forces the dongle compositor to alpha-blend it over the blur(60px) cover backdrop
+           every frame (in active the opaque video occludes the backdrop = cheap). If the overlay now updates
+           DURING rest, this was it → re-introduce the dim via a cheap solid scrim on TOP, not video opacity. */
+        .screen[data-phase="exerciseRest"] #video { opacity: 1; transform: none; }
 
         /* Side panels */
         .panel { grid-row: 1; align-self: center; min-width: 0; }
@@ -275,7 +280,7 @@
     <div id="liveDbg"></div>
     <div id="phaseDbg"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.11</div>
+    <div id="version">v0.0.12</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
