@@ -86,7 +86,7 @@
             background-size: cover; background-position: center;
             filter: blur(var(--ambient-blur)) saturate(1.15);
             transform: scale(var(--ambient-scale));
-            opacity: 0; transition: opacity 800ms ease;
+            opacity: 0; transition: opacity 3000ms ease;
         }
         #frost { position: fixed; inset: 0; z-index: 3; background: var(--frost); }
 
@@ -265,7 +265,7 @@
     <div id="idle">MadMuscles</div>
     <div id="spinner"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.6</div>
+    <div id="version">v0.0.7</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -339,7 +339,7 @@
                 case 'exerciseActive':
                     eyebrow = num; title = d.title || ''; sub = d.nextTitle ? 'Next up · ' + d.nextTitle : ''; rightMode = 'timer'; break;
                 case 'exercisePreview':
-                    eyebrow = 'Up next'; title = d.title || ''; break;
+                    eyebrow = 'Up next'; title = d.title || ''; rightMode = 'label'; rightLabel = 'Preview'; break;
                 case 'exerciseRest':
                     // Rest: the LEFT shows "Rest" in place of the exercise name; the next exercise drops to
                     // the sub-line. The video frame scales down + dims (the [data-phase="exerciseRest"]
@@ -404,6 +404,7 @@
         function applyOverlay(d) {
             if (!d || d.type !== 'overlay') return;
             idleEl.classList.add('hidden');
+            if (d.phase !== currentPhase) diag('phase ' + d.phase + ' t=' + (d.timer || '-'));  // TEMP: phase-transition probe (hidden #diag)
             currentPhase = d.phase;
             screenEl.dataset.phase = d.phase;
             chipEl.textContent = d.workoutTitle || '';
@@ -450,7 +451,19 @@
         // re-shows it whenever playback stalls — never while the video is intentionally paused.
         const spinnerEl = el('spinner');
         const videoEl = el('video');
-        const setBuffering = (on) => spinnerEl.classList.toggle('show', !!on);
+        // Debounced so rapid seeks (clicking "next" many times fast) don't make the spinner strobe:
+        // show immediately, but defer HIDING ~350 ms — a burst of seek/buffer/waiting events keeps
+        // cancelling the pending hide, so it stays one steady spinner and only clears once playback
+        // actually settles, instead of flickering on/off per event.
+        let bufferingHideTimer = null;
+        const setBuffering = (on) => {
+            if (on) {
+                if (bufferingHideTimer) { clearTimeout(bufferingHideTimer); bufferingHideTimer = null; }
+                spinnerEl.classList.add('show');
+            } else if (!bufferingHideTimer) {
+                bufferingHideTimer = setTimeout(() => { spinnerEl.classList.remove('show'); bufferingHideTimer = null; }, 350);
+            }
+        };
         playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOADING, () => { setBuffering(true); diag('PLAYER_LOADING'); });
         playerManager.addEventListener(cast.framework.events.EventType.BUFFERING, (event) => { if (event.isBuffering) setBuffering(true); });
         videoEl.addEventListener('waiting', () => setBuffering(true));
