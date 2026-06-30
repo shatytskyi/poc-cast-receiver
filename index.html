@@ -46,24 +46,27 @@
            gradient, overscaled so the blur's soft edges never reach the screen border. The #frost layer
            on top darkens it (or tints it white) so the white/orange UI stays legible. Both sit behind
            #stage. CSS filter only paints — it never reads pixels — so no canvas/CORS taint. */
+        /* These ambient layers sit BEHIND the page content on NEGATIVE z-index so the rest of the DOM
+           keeps its original default stacking — important so we don't disturb the platform's system
+           playback overlay (which we must never touch). */
         #ambient {
-            position: absolute; inset: 0; z-index: 0;
+            position: absolute; inset: 0; z-index: -3;
             background: radial-gradient(120% 95% at 50% 28%, #2c323f 0%, #14161d 56%, #000 100%);
         }
         /* The blurred cover sits on its own layer above the gradient and fades in (opacity 0 → 1) once
            the image has loaded, so it never pops in instantly. */
         #cover {
-            position: absolute; inset: 0; z-index: 0;
+            position: absolute; inset: 0; z-index: -2;
             background-size: cover; background-position: center;
             filter: blur(var(--ambient-blur)) saturate(1.15);
             transform: scale(var(--ambient-scale));
             opacity: 0; transition: opacity 800ms ease;
         }
-        #frost { position: absolute; inset: 0; z-index: 1; background: var(--frost); }
+        #frost { position: absolute; inset: 0; z-index: -1; background: var(--frost); }
 
-        /* Side panels + video layer, above the ambient. */
+        /* Side panels + video layer. No z-index → default stacking (restored). */
         #stage {
-            position: absolute; inset: 0; z-index: 2;
+            position: absolute; inset: 0;
             display: grid;
             grid-template-columns: 1fr minmax(0, auto) 1fr;
             align-items: center;                     /* centers the side panels vertically */
@@ -112,6 +115,16 @@
         .timer.no-ring svg { display: none; }
         .right.hide-timer .timer { display: none; }
 
+        /* Right-panel action prompt (intro → Start, outro → Complete): a prominent "do X on your phone"
+           block shown in place of the timer, mirroring the phone's exact button label. */
+        #rightPrompt { display: none; flex-direction: column; align-items: center; gap: 1.6vh; max-width: 24vw; }
+        .right.show-prompt .timer { display: none; }
+        .right.show-prompt #rightPrompt { display: flex; }
+        .prompt-glyph { width: 38px; height: 58px; border: 2.5px solid var(--accent); border-radius: 8px; position: relative; flex: none; }
+        .prompt-glyph::after { content: ""; position: absolute; left: 50%; bottom: 6px; width: 13px; height: 3px; transform: translateX(-50%); background: var(--accent); border-radius: 2px; }
+        .prompt-text { margin: 0; font-size: clamp(19px, 2.5vw, 32px); font-weight: 700; line-height: 1.25; text-align: center; }
+        .prompt-text b { display: block; margin: 0.4vh 0; color: var(--accent); font-weight: 800; }
+
         /* Segmented progress */
         #progress { position: absolute; left: 4.5%; right: 4.5%; top: var(--gap); display: flex; gap: 5px; }
         .seg { flex: 1; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.16); overflow: hidden; }
@@ -141,7 +154,7 @@
         #cardHint .glyph::after { content:""; position:absolute; left:50%; bottom:3px; width:7px; height:2px; transform:translateX(-50%); background:var(--accent); border-radius:2px; }
         #cardHint.hide { display: none; }
 
-        #idle { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 3vh; letter-spacing: 0.05em; }
+        #idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 3vh; letter-spacing: 0.05em; }
         #idle.hidden { display: none; }
 
 
@@ -183,6 +196,10 @@
                 </svg>
                 <div class="value" id="timerValue"></div>
             </div>
+            <div id="rightPrompt">
+                <span class="prompt-glyph"></span>
+                <p class="prompt-text">Tap<b id="promptBtn"></b>on your phone</p>
+            </div>
         </div>
 
         <div id="chip"></div>
@@ -213,6 +230,7 @@
         const leftEyebrow = el('leftEyebrow'), leftTitle = el('leftTitle'), leftSub = el('leftSub');
         const rightPanel = el('rightPanel'), timerValue = el('timerValue'), ring = el('ring');
         const timerEl = document.querySelector('.timer');
+        const promptBtnEl = el('promptBtn');
         const cardEl = el('card'), cardLabel = el('cardLabel'), cardTitle = el('cardTitle'), cardHint = el('cardHint'), cardHintText = el('cardHintText');
 
         ring.style.strokeDasharray = RING_C.toFixed(1);
@@ -243,7 +261,7 @@
 
         function renderPanels(d) {
             let eyebrow = '', title = '', sub = '';
-            let rightMode = 'hidden', rightLabel = '';
+            let rightMode = 'hidden', rightLabel = '', promptBtn = '';
             const num = (d.exerciseNumber && d.exerciseCount) ? 'Exercise ' + d.exerciseNumber + ' of ' + d.exerciseCount : '';
             switch (d.phase) {
                 case 'exerciseActive':
@@ -253,23 +271,31 @@
                 case 'exerciseRest':
                     eyebrow = 'Rest · next up'; title = d.nextTitle || d.title || ''; sub = 'Catch your breath'; rightMode = 'timer'; break;
                 case 'intro':
-                    // Keep the intro VIDEO visible — show the prompt beside it, not over it.
-                    eyebrow = 'Get started'; title = d.workoutTitle || 'Workout'; sub = 'Press Start on your phone';
-                    rightMode = 'label'; rightLabel = 'Intro'; break;
+                    // Intro VIDEO stays visible; the call-to-action is the prominent right-panel prompt,
+                    // labelled with the phone's exact button text.
+                    eyebrow = 'Get started'; title = d.workoutTitle || 'Workout';
+                    rightMode = 'prompt'; promptBtn = 'Start workout'; break;
                 case 'outro':
-                    eyebrow = 'Almost done'; title = d.workoutTitle || ''; sub = 'Tap Complete on your phone';
-                    rightMode = 'label'; rightLabel = 'Outro'; break;
+                    eyebrow = 'Almost done'; title = d.workoutTitle || '';
+                    rightMode = 'prompt'; promptBtn = 'Complete'; break;
                 default:
                     break; // completed renders as a card overlay
             }
             leftEyebrow.textContent = eyebrow;
             leftTitle.textContent = title;
             leftSub.textContent = sub;
-            applyRight(rightMode, rightLabel, d);
+            applyRight(rightMode, rightLabel, d, promptBtn);
         }
 
-        // Right panel: 'timer' = ring + mm:ss, 'label' = a word (Intro/Outro) with no ring, 'hidden' = nothing.
-        function applyRight(mode, label, d) {
+        // Right panel: 'timer' = ring + mm:ss, 'prompt' = "Tap <button> on your phone" call-to-action,
+        // 'label' = a bare word, 'hidden' = nothing.
+        function applyRight(mode, label, d, promptBtn) {
+            rightPanel.classList.toggle('show-prompt', mode === 'prompt');
+            if (mode === 'prompt') {
+                rightPanel.classList.remove('hide-timer');
+                promptBtnEl.textContent = promptBtn || '';
+                return;
+            }
             if (mode === 'hidden') { rightPanel.classList.add('hide-timer'); return; }
             rightPanel.classList.remove('hide-timer');
             if (mode === 'timer') {
