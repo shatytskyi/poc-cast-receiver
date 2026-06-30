@@ -37,7 +37,7 @@
         }
         * { box-sizing: border-box; }
         html, body {
-            margin: 0; height: 100%; overflow: hidden;
+            margin: 0; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none;
             background: #000; color: var(--text);
             font-family: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
         }
@@ -50,23 +50,23 @@
            keeps its original default stacking — important so we don't disturb the platform's system
            playback overlay (which we must never touch). */
         #ambient {
-            position: absolute; inset: 0; z-index: -3;
+            position: fixed; inset: 0; z-index: -3;
             background: radial-gradient(120% 95% at 50% 28%, #2c323f 0%, #14161d 56%, #000 100%);
         }
         /* The blurred cover sits on its own layer above the gradient and fades in (opacity 0 → 1) once
            the image has loaded, so it never pops in instantly. */
         #cover {
-            position: absolute; inset: 0; z-index: -2;
+            position: fixed; inset: 0; z-index: -2;
             background-size: cover; background-position: center;
             filter: blur(var(--ambient-blur)) saturate(1.15);
             transform: scale(var(--ambient-scale));
             opacity: 0; transition: opacity 800ms ease;
         }
-        #frost { position: absolute; inset: 0; z-index: -1; background: var(--frost); }
+        #frost { position: fixed; inset: 0; z-index: -1; background: var(--frost); }
 
         /* Side panels + video layer. No z-index → default stacking (restored). */
         #stage {
-            position: absolute; inset: 0;
+            position: fixed; inset: 0;
             display: grid;
             grid-template-columns: 1fr minmax(0, auto) 1fr;
             align-items: center;                     /* centers the side panels vertically */
@@ -154,13 +154,13 @@
         #cardHint .glyph::after { content:""; position:absolute; left:50%; bottom:3px; width:7px; height:2px; transform:translateX(-50%); background:var(--accent); border-radius:2px; }
         #cardHint.hide { display: none; }
 
-        #idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 3vh; letter-spacing: 0.05em; }
+        #idle { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 3vh; letter-spacing: 0.05em; }
         #idle.hidden { display: none; }
 
 
         /* Buffering spinner — shown while the video (re)buffers so the TV isn't a frozen/black frame. */
         #spinner {
-            position: absolute; left: 50%; top: 50%; width: 64px; height: 64px;
+            position: fixed; left: 50%; top: 50%; width: 64px; height: 64px;
             margin: -32px 0 0 -32px; box-sizing: border-box;
             border: 4px solid rgba(255,255,255,0.16); border-top-color: var(--accent);
             border-radius: 50%; display: none; z-index: 5;
@@ -441,6 +441,13 @@
             }
         });
         window.addEventListener('pagehide', () => { try { context.stop(); } catch (e) {} });
+
+        // Hard scroll-lock: the TV system overlay / focus changes can scroll the document and leave the
+        // whole UI shifted up. All layers are position:fixed (viewport-anchored, immune to the WebView
+        // window resize the overlay triggers), and this snaps any stray scroll back to the top. (MA-4513)
+        const resetScroll = () => { if (window.scrollY || window.scrollX) window.scrollTo(0, 0); };
+        window.addEventListener('scroll', resetScroll, { passive: true });
+        window.addEventListener('resize', resetScroll);
 
         const options = new cast.framework.CastReceiverOptions();
         options.useShakaForHls = true;
