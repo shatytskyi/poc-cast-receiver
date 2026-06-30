@@ -265,7 +265,7 @@
     <div id="idle">MadMuscles</div>
     <div id="spinner"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.5</div>
+    <div id="version">v0.0.6</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -566,6 +566,16 @@
             try { url = (req && req.media && (req.media.contentUrl || req.media.contentId)) || '(none)'; } catch (e) {}
             const at = (req && req.currentTime != null) ? Math.round(req.currentTime) : 0;
             diag('LOAD #' + loadCount + ' start@' + at + 's\n  ' + url);
+            // Paint the blurred cover NOW, from the LOAD request's customData — it's paint-only (no CORS)
+            // and shouldn't wait for PLAYER_LOAD_COMPLETE (which never fires if the video fails to load).
+            // So the frosted background appears the instant the cast loads, even before/without playback.
+            try {
+                const cd = req && req.media && req.media.customData;
+                if (cd) {
+                    if (cd.cover) applyCover(cd.cover);
+                    if (cd.audio) desiredAudioLabel = cd.audio;
+                }
+            } catch (e) {}
             return req;
         });
         playerManager.setMessageInterceptor(MsgType.STOP, (req) => { diag('>> STOP received'); return req; });
