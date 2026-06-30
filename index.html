@@ -135,7 +135,7 @@
         .timer .track { fill: none; stroke: var(--on-dark-soft); stroke-width: 6; }
         .timer .fill {
             fill: none; stroke: var(--text); stroke-width: 6; stroke-linecap: round;
-            stroke-dasharray: 289; stroke-dashoffset: 0; transition: stroke-dashoffset 950ms linear;
+            stroke-dashoffset: 0; transition: stroke-dashoffset 950ms linear;
         }
         .timer .value { font-family: var(--font-digits); font-size: clamp(30px, 5.2vw, 58px); font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; }
         .timer .value.label { font-family: var(--font-ui); font-size: clamp(20px, 3vw, 34px); font-weight: 700; letter-spacing: 0.02em; }
@@ -181,7 +181,7 @@
         /* Full-screen completion card — shown when the outro VIDEO fully ends (not on a phase flag). */
         #card {
             position: absolute; inset: 0; z-index: 7; display: none; flex-direction: column; align-items: center; justify-content: center;
-            gap: 1.6vh; background: var(--on-light-heavy); backdrop-filter: blur(4px); text-align: center;
+            gap: 1.6vh; background: var(--on-light-heavy); text-align: center;
         }
         #card.show { display: flex; }
         #cardLabel { font-size: clamp(13px, 1.8vw, 18px); letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
@@ -228,7 +228,7 @@
     <div id="frost"></div>
 
     <div id="stage" class="screen">
-        <video id="video" class="castMediaElement" playsinline></video>
+        <video id="video" class="castMediaElement"></video>
 
         <div class="panel left">
             <p class="eyebrow" id="leftEyebrow"></p>
@@ -263,7 +263,7 @@
     <div id="idle">MadMuscles</div>
     <div id="spinner"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.13</div>
+    <div id="version">v0.0.14</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -496,8 +496,11 @@
         // Blurred workout cover as the frosted-glass ambient. CSS background-image only displays the
         // image (no canvas read), so the cross-origin CDN URL needs no CORS headers.
         const coverEl = el('cover');
+        let appliedCoverUrl = null;
         function applyCover(url) {
-            if (!url) return;
+            // Idempotent: both the LOAD interceptor and PLAYER_LOAD_COMPLETE call this; skip the second.
+            if (!url || url === appliedCoverUrl) return;
+            appliedCoverUrl = url;
             const safe = url.replace(/'/g, "%27");
             // Preload, then fade in: the CSS background reads the now-cached image and the opacity
             // transition (0 → 1) animates it in instead of popping instantly.
