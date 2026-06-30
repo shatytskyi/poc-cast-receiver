@@ -135,7 +135,7 @@
         .timer svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
         .timer .track { fill: none; stroke: var(--on-dark-soft); stroke-width: 6; }
         .timer .fill {
-            fill: none; stroke: var(--accent); stroke-width: 6; stroke-linecap: round;
+            fill: none; stroke: var(--text); stroke-width: 6; stroke-linecap: round;
             stroke-dasharray: 289; stroke-dashoffset: 0; transition: stroke-dashoffset 950ms linear;
         }
         .timer .value { font-family: var(--font-digits); font-size: clamp(30px, 5.2vw, 58px); font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; }
@@ -203,7 +203,7 @@
         #spinner {
             position: fixed; left: 50%; top: 50%; width: 64px; height: 64px;
             margin: -32px 0 0 -32px; box-sizing: border-box;
-            border: 4px solid var(--on-dark-soft); border-top-color: var(--accent);
+            border: 4px solid var(--on-dark-soft); border-top-color: var(--text);
             border-radius: 50%; display: none; z-index: 6;
         }
         #spinner.show { display: block; }
@@ -214,7 +214,8 @@
 
         /* TEMP diagnostic (MA-4513 error-905 probe): surfaces the player ERROR code + Shaka detail on
            screen so we can confirm the CORS fix. Remove once the CDN CORS issue is resolved. */
-        #diag { position: fixed; left: 10px; bottom: 10px; z-index: 9; max-width: 60vw; font: 13px/1.35 monospace; color: rgba(255,170,150,0.9); pointer-events: none; white-space: pre-wrap; }
+        /* Temporarily HIDDEN at the user's request (logging kept running for re-enable during CORS testing — flip display back to block). */
+        #diag { display: none; position: fixed; left: 10px; bottom: 10px; z-index: 9; max-width: 60vw; font: 13px/1.35 monospace; color: rgba(255,170,150,0.9); pointer-events: none; white-space: pre-wrap; }
 
         /* Receiver build version — bumped on every deploy so we can confirm what's actually running. */
         #version { position: fixed; right: 10px; bottom: 10px; z-index: 9; font: 11px monospace; color: rgba(255,255,255,0.3); pointer-events: none; }
@@ -263,7 +264,7 @@
     <div id="idle">MadMuscles</div>
     <div id="spinner"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.3</div>
+    <div id="version">v0.0.4</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
