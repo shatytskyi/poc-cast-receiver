@@ -29,6 +29,10 @@
             --faint: rgba(243,244,247,0.32);
             --gap: 1.6vh;        /* offset of the progress bar from the top screen edge */
             --video-gap: 4vh;    /* double gap above the video — clears the top progress bar; single 2vh below */
+            /* Frosted-glass ambient (blurred workout cover behind the video). */
+            --ambient-blur: 60px;             /* blur radius of the cover */
+            --ambient-scale: 1.2;             /* overscan so blurred edges never show */
+            --frost: rgba(8, 9, 12, 0.58);    /* DARK frost (keeps white/orange UI legible). White-glass alt: rgba(255,255,255,0.10) */
         }
         * { box-sizing: border-box; }
         html, body {
@@ -37,14 +41,28 @@
             font-family: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
         }
 
-        /* Ambient backdrop behind the pillarboxed video (static for now). */
+        /* Frosted-glass ambient: blurred workout cover (set from load customData.cover) with a fallback
+           gradient, overscaled so the blur's soft edges never reach the screen border. The #frost layer
+           on top darkens it (or tints it white) so the white/orange UI stays legible. Both sit behind
+           #stage. CSS filter only paints — it never reads pixels — so no canvas/CORS taint. */
+        #ambient {
+            position: absolute; inset: 0; z-index: 0;
+            background: radial-gradient(120% 95% at 50% 28%, #2c323f 0%, #14161d 56%, #000 100%);
+            background-size: cover; background-position: center;
+            filter: blur(var(--ambient-blur)) saturate(1.15);
+            transform: scale(var(--ambient-scale));
+            transition: opacity 600ms ease;
+        }
+        #frost { position: absolute; inset: 0; z-index: 1; background: var(--frost); }
+
+        /* Side panels + video layer, above the ambient. */
         #stage {
-            position: absolute; inset: 0;
+            position: absolute; inset: 0; z-index: 2;
             display: grid;
             grid-template-columns: 1fr minmax(0, auto) 1fr;
             align-items: center;                     /* centers the side panels vertically */
             padding: 0 4.5%;                         /* horizontal only → video flush to the top */
-            background: radial-gradient(120% 95% at 50% 28%, #2c323f 0%, #14161d 56%, #000 100%);
+            background: transparent;                 /* the #ambient layer is the background now */
         }
         /* Kill the native video controls bar that the platform flashes on pause/unpause. */
         #video::-webkit-media-controls,
@@ -118,7 +136,7 @@
         #cardHint .glyph::after { content:""; position:absolute; left:50%; bottom:3px; width:7px; height:2px; transform:translateX(-50%); background:var(--accent); border-radius:2px; }
         #cardHint.hide { display: none; }
 
-        #idle { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 3vh; letter-spacing: 0.05em; }
+        #idle { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 3vh; letter-spacing: 0.05em; }
         #idle.hidden { display: none; }
 
         @media (prefers-reduced-motion: no-preference) {
@@ -146,6 +164,9 @@
     <script src="//www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
 </head>
 <body>
+    <div id="ambient"></div>
+    <div id="frost"></div>
+
     <div id="stage" class="screen">
         <video id="video" class="castMediaElement" playsinline></video>
 
@@ -375,12 +396,21 @@
             }
         }, 250);
 
-        // Apply the phone's audio rendition once Shaka has the manifest: prefer a label already
+        // Blurred workout cover as the frosted-glass ambient. CSS background-image only displays the
+        // image (no canvas read), so the cross-origin CDN URL needs no CORS headers.
+        const ambientEl = el('ambient');
+        function applyCover(url) {
+            if (!url) return;
+            ambientEl.style.backgroundImage = "url('" + url.replace(/'/g, "%27") + "')";
+        }
+
+        // Apply the phone's audio rendition + cover once Shaka has the manifest: prefer a label already
         // requested over the channel, else the one passed in load customData.
         playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
             const info = playerManager.getMediaInformation && playerManager.getMediaInformation();
-            const fromLoad = info && info.customData && info.customData.audio;
-            applyAudioLabel(desiredAudioLabel || fromLoad);
+            const customData = (info && info.customData) || {};
+            applyAudioLabel(desiredAudioLabel || customData.audio);
+            applyCover(customData.cover);
         });
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
