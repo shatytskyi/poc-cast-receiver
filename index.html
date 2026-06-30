@@ -275,7 +275,7 @@
     <div id="liveDbg"></div>
     <div id="phaseDbg"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.10</div>
+    <div id="version">v0.0.11</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -467,6 +467,16 @@
             applyOverlay(data);
         });
 
+        // TEMP (MA-4513): report page-visibility transitions to the phone the instant they happen.
+        // visibilitychange fires even when timers are throttled, so if the receiver is backgrounded at rest
+        // start (which would throttle setInterval + defer channel delivery) we catch it with exact timing.
+        // logcat "Cast: receiver message" → look for {"type":"vis","state":"hidden"} at rest start.
+        document.addEventListener('visibilitychange', () => {
+            try {
+                context.sendCustomMessage(NAMESPACE, { type: 'vis', state: document.visibilityState, hidden: document.hidden });
+            } catch (e) {}
+        });
+
         // Buffering spinner. The single honest signal for "is the video actually playing" is whether
         // currentTime is advancing — both PLAYER_LOAD_COMPLETE and the HTML5 `playing` event fire when
         // the FIRST frame is presented while Shaka is still buffering segments (so they hid the spinner
@@ -501,6 +511,18 @@
             // event loop is blocked. paused/rs expose whether the video is paused vs buffering (readyState
             // drops while starved). ovl = last overlay the receiver actually processed.
             tick++;
+            // TEMP (MA-4513): heartbeat to the phone every ~1s. logcat "Cast: receiver message" shows a 1/s
+            // pulse; a GAP during rest = hard JS block, a slow ~1/min pulse = background-tab timer throttle.
+            // Carries page visibility so we can tell those apart. The send rides this same (possibly frozen)
+            // interval on purpose — its absence IS the measurement.
+            if (tick % 4 === 0) {
+                try {
+                    context.sendCustomMessage(NAMESPACE, {
+                        type: 'hb', n: tick, vt: Math.round(videoEl.currentTime || 0),
+                        hidden: document.hidden, vis: document.visibilityState,
+                    });
+                } catch (e) {}
+            }
             liveDbgEl.textContent = 'n=' + tick + ' vt=' + Math.round(videoEl.currentTime || 0) +
                 's paused=' + (videoEl.paused ? 1 : 0) + ' rs=' + videoEl.readyState +
                 ' ovl=' + lastOverlayPhase + (lastOverlayTimer ? ' ' + lastOverlayTimer : '');
