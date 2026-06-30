@@ -125,6 +125,7 @@
             margin: 0 0 1.2vh; font-size: clamp(11px, 1.5vw, 15px); font-weight: 700;
             letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-secondary);
         }
+        .eyebrow:empty { display: none; }   /* no empty-label gap (e.g. the Rest phase has no eyebrow) */
         /* Title = titleXl (700, -0.02em). */
         .left .title { margin: 0; font-size: clamp(20px, 3.6vw, 40px); font-weight: 700; line-height: 1.08; letter-spacing: -0.02em; }
         .left .sub { margin: 1.6vh 0 0; font-size: clamp(13px, 1.7vw, 18px); color: var(--text-secondary); }
@@ -264,7 +265,7 @@
     <div id="idle">MadMuscles</div>
     <div id="spinner"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.4</div>
+    <div id="version">v0.0.5</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -340,7 +341,10 @@
                 case 'exercisePreview':
                     eyebrow = 'Up next'; title = d.title || ''; break;
                 case 'exerciseRest':
-                    eyebrow = 'Rest · next up'; title = d.nextTitle || d.title || ''; sub = 'Catch your breath'; rightMode = 'timer'; break;
+                    // Rest: the LEFT shows "Rest" in place of the exercise name; the next exercise drops to
+                    // the sub-line. The video frame scales down + dims (the [data-phase="exerciseRest"]
+                    // rule), mirroring the phone. Timer (ring + mm:ss) stays on the right.
+                    title = 'Rest'; sub = d.nextTitle ? 'Next up · ' + d.nextTitle : 'Catch your breath'; rightMode = 'timer'; break;
                 case 'intro':
                     // Intro VIDEO stays visible; the call-to-action is the prominent right-panel prompt,
                     // labelled with the phone's exact button text.
