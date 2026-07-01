@@ -325,7 +325,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.38</div>
+    <div id="version">v0.0.39</div>
     <div id="resinfo"></div>
 
     <script>
@@ -497,8 +497,8 @@
             if (!d || d.type !== 'overlay') return;
             idleEl.classList.add('hidden');
             currentPhase = d.phase;
-            // Left the end of the workout (e.g. Previous from the completion card — reachable via the
-            // TV remote since M4): drop the ended flag so the celebration card stops covering the video.
+            // Left the end of the workout (e.g. Previous pressed on the phone from the completion card):
+            // drop the ended flag so the celebration card stops covering the video.
             if (d.phase !== 'outro' && d.phase !== 'completed') videoEnded = false;
             screenEl.dataset.phase = d.phase;
             chipEl.textContent = d.workoutTitle || '';
@@ -599,7 +599,12 @@
                 const cap = (maxDecodableHeight === null ? '?' : ('≤' + maxDecodableHeight));
                 const sel = active ? (active.width + '×' + active.height) : '—';
                 const avail = tracks.map(t => t.width + '×' + t.height + (t.active ? '*' : '')).join('  ');
-                resinfoEl.textContent = tierProbe + '\nplaying ' + sel + '   cap ' + cap + (fallbackAttempts ? '  fb#' + fallbackAttempts : '') + '\n[' + avail + ']';
+                resinfoEl.textContent =
+                    envProbe + '\n' +
+                    tierProbe + '\n' +
+                    'cfg: ' + cfgProbe + '\n' +
+                    'mf: ' + (manifestHandlerSeen || '—') + '  last: ' + lastManifestReqTail + '\n' +
+                    'playing ' + sel + '   probeCap ' + cap + (fallbackAttempts ? '  fb#' + fallbackAttempts : '') + '\n[' + avail + ']';
             } catch (e) {}
         }
 
@@ -675,6 +680,26 @@
                 lastLoadedUrl = src;
                 diag('LOAD_COMPLETE\n  ' + src);
             } catch (e) {}
+            // §6 Step 0 probes: environment (once) + what the LIVE shaka instance actually has configured
+            // — the objective signals for the abr.restrictions re-test (§3.2). Read fresh on every load:
+            // CAF creates a NEW shaka.Player per load, nothing configured earlier carries over.
+            try {
+                if (!envLogged) {
+                    envLogged = true;
+                    const shakaVer = (window.shaka && shaka.Player && shaka.Player.version) || '?';
+                    const hasDevInfo = typeof context.getDeviceInformation === 'function';
+                    envProbe = 'CAF ' + (cast.framework.VERSION || '?') + ' · shaka ' + shakaVer + ' · devinfo ' + (hasDevInfo ? 'Y' : 'N');
+                    diag(envProbe);
+                }
+                const shakaNow = playerManager.getShakaPlayer && playerManager.getShakaPlayer();
+                const cfg = shakaNow && shakaNow.getConfiguration && shakaNow.getConfiguration();
+                if (cfg) {
+                    cfgProbe = 'abr.enabled=' + cfg.abr.enabled +
+                        ' abr.maxH=' + (cfg.abr.restrictions ? cfg.abr.restrictions.maxHeight : '—') +
+                        ' hard.maxH=' + (cfg.restrictions ? cfg.restrictions.maxHeight : '—');
+                    diag('cfg: ' + cfgProbe);
+                }
+            } catch (e) { cfgProbe = 'cfg read failed: ' + e; }
         });
 
         // ── MA-4513: decode-error fallback (step DOWN the ABR height cap and reload) ──────────────
@@ -687,6 +712,11 @@
         const MAX_FALLBACK_ATTEMPTS = 6;
         let capturedLoadRequest = null;   // the sender's LoadRequestData, captured on LOAD so a reload can reuse its media
         let forcedRungHeight = null;      // null = playing the master (ABR); else the single-rung height we forced
+        // Fallback lifecycle guards (review doc §2.5/§2.8): a fresh SENDER load must reset the ladder
+        // state and cancel any pending retry; a stale retry timer must never clobber a newer command.
+        let loadGeneration = 0;           // bumped on every EXTERNAL (sender) LOAD/STOP
+        let fallbackTimer = null;         // pending fallback reload; cancelled by newer external commands
+        let pendingInternalReload = false; // marks the fallback's own load() in the LOAD interceptor
         // Single-rung media-playlist URLs, DESCENDING by height. The maxHeight restriction
         // (setMediaPlaybackInfoHandler → shakaConfig.restrictions) proved INERT on the LG (ACTIVE stayed
         // 1080x1920 even at maxHeight=1080), so the fallback swaps the contentUrl to a lower SINGLE-RUNG
@@ -743,23 +773,26 @@
             } catch (x) {}
             diag('ERROR code=' + code + (extra ? '\n  ' + extra : ''));
             logError('media error  code=' + code + (extra ? '  ' + extra : ''));
-            // Decode-error fallback: step the height cap below the current tallest rung and reload, so a
-            // decoder that can't render a tall portrait rung retries a shorter one (MA-4513). Only for
-            // decode (3016/MEDIA) errors — stepping resolution won't fix a network/CORS failure.
-            // Decode-error fallback: swap to a LOWER single-rung playlist and reload (the maxHeight
-            // restriction is inert on this device — ACTIVE stayed 1080x1920 — so we force the resolution by
-            // URL, not via ABR). Step from the failed height to the next lower rung until one renders.
+            // Decode-error fallback: swap to a LOWER single-rung playlist and reload. GATED on decode
+            // errors only (review §2.1) — stepping resolution can't fix a network/CORS failure, and an
+            // ungated fallback would swap the test-pattern streams in for a CORS-broken workout. The
+            // reload is generation-guarded (review §2.8): a sender LOAD/STOP issued meanwhile wins.
             const failedH = (forcedRungHeight != null) ? forcedRungHeight : (lastActiveHeightNum || 1920);
             const next = RUNGS_DESC.filter(r => r.h < failedH)[0] || null;   // descending → [0] = tallest below failedH
             logError('decode=' + isDecodeError(event) + ' ACTIVE=' + lastActiveWxH + ' failedH=' + failedH + ' next=' + (next ? next.h : 'none') + ' fb=' + fallbackAttempts);
-            if (next && fallbackAttempts < MAX_FALLBACK_ATTEMPTS) {
+            if (isDecodeError(event) && next && fallbackAttempts < MAX_FALLBACK_ATTEMPTS) {
                 fallbackAttempts++;
                 forcedRungHeight = next.h;
+                const gen = loadGeneration;
                 logError('FALLBACK #' + fallbackAttempts + ': force ' + next.h + ' → ' + next.url);
                 // Reload after a tick so the fatal error fully unwinds first. If the reload can't be issued,
                 // surface the error instead of hanging silently.
-                setTimeout(() => {
+                fallbackTimer = setTimeout(() => {
+                    fallbackTimer = null;
+                    if (gen !== loadGeneration) { logError('fallback #' + fallbackAttempts + ' cancelled (newer load/stop)'); return; }
+                    pendingInternalReload = true;
                     if (!reloadWithUrl(next.url)) {
+                        pendingInternalReload = false;
                         showError('Playback error', 'The workout video failed to load on the TV.', 'code=' + code + (extra ? '  ·  ' + extra : ''));
                     }
                 }, 60);
@@ -805,6 +838,17 @@
         let loadCount = 0;
         playerManager.setMessageInterceptor(MsgType.LOAD, (req) => {
             loadCount++;
+            const isInternalReload = pendingInternalReload;
+            pendingInternalReload = false;
+            if (!isInternalReload) {
+                // A fresh SENDER load: reset the fallback ladder state and cancel any pending retry —
+                // otherwise a second cast in the same session inherits exhausted attempts / a stale
+                // forced height, and a pending retry timer could clobber this newer load (review §2.5).
+                loadGeneration++;
+                if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+                fallbackAttempts = 0;
+                forcedRungHeight = null;
+            }
             capturedLoadRequest = req;   // keep the request so the decode-fallback can reload without getMediaInformation()
             // A fresh load attempt (incl. a retry): clear any prior error and arm the playback watchdog.
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
@@ -825,7 +869,13 @@
             } catch (e) {}
             return req;
         });
-        playerManager.setMessageInterceptor(MsgType.STOP, (req) => { diag('>> STOP received'); return req; });
+        playerManager.setMessageInterceptor(MsgType.STOP, (req) => {
+            diag('>> STOP received');
+            // A sender STOP outranks any pending fallback retry (review §2.8).
+            loadGeneration++;
+            if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+            return req;
+        });
         playerManager.setMessageInterceptor(MsgType.SEEK, (req) => {
             const at = (req && req.currentTime != null) ? Math.round(req.currentTime) : '?';
             diag('>> SEEK ' + at + 's'); return req;
@@ -856,6 +906,12 @@
         // to the actual decode ERROR (step the cap below the failed rung + reload).
         let tierProbe = '(probe pending)';
         let maxDecodableHeight = null;   // computed lazily on the first load (after context.start)
+        // §6 Step 0 probes (review doc): the on-screen signals for the verification session.
+        let envProbe = '(env pending)';         // CAF/Shaka versions + getDeviceInformation availability
+        let cfgProbe = '(cfg pending)';         // what the LIVE shaka instance really has configured
+        let lastManifestReqTail = '—';          // tail of the last fetched manifest URL = which rung loaded
+        let manifestHandlerSeen = '';           // whether manifestHandler fired (master✓ / media✓)
+        let envLogged = false;
         function computeMaxDecodableHeight() {
             const H264 = 'avc1.640028';   // High@4.0 — matches our test ladder
             const canDisplay = (w, h) => { try { return !!context.canDisplayType('video/mp4', H264, w, h, 30); } catch (e) { return false; } };
@@ -878,14 +934,73 @@
             diag('decode tier: ' + tierProbe);
             return maxH;
         }
+        // TEMP toggles for the review doc §6 Step 0/1 verification session. Each candidate mechanism is
+        // applied only when its toggle is non-zero so the experiments stay isolated. Switching = flip a
+        // toggle + bump #version + redeploy (session part A = abr restrictions, part B = manifest filter).
+        const TEST_ABR_RESTRICTIONS_MAX_HEIGHT = 1080;   // candidate 1 (§3.2 re-test): soft ABR-level cap
+        const TEST_MANIFEST_FILTER_MAX_HEIGHT = 0;       // candidate 2 (§3.4): master-playlist text filter
+
+        // Strips #EXT-X-STREAM-INF (and #EXT-X-I-FRAME-STREAM-INF) variants taller than `cap` from a
+        // MASTER playlist text. Every #EXT-X-MEDIA line survives — the audio renditions must never be
+        // dropped (review §2.2). Fail-open: on anything unexpected, or if filtering would leave zero
+        // variants, return the original text so playback degrades to the unfiltered ladder, not a crash.
+        function filterMasterByHeight(text, cap) {
+            try {
+                const lines = text.split('\n');
+                const out = [];
+                let kept = 0;
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    const isIFrame = line.indexOf('#EXT-X-I-FRAME-STREAM-INF') === 0;
+                    const isVariant = !isIFrame && line.indexOf('#EXT-X-STREAM-INF') === 0;
+                    const res = (isIFrame || isVariant) ? line.match(/RESOLUTION=(\d+)x(\d+)/) : null;
+                    if (res && Number(res[2]) > cap) {
+                        if (isVariant) i++;   // also skip the variant's URI line (the next line per HLS spec)
+                        continue;
+                    }
+                    if (isVariant && res) kept++;
+                    out.push(line);
+                }
+                return kept > 0 ? out.join('\n') : text;
+            } catch (e) { logError('master filter failed: ' + e); return text; }
+        }
+
         playerManager.setMediaPlaybackInfoHandler((loadRequestData, playbackConfig) => {
             try {
+                // canDisplayType probe is DISPLAY-ONLY now (proven a liar for tiering, plan §6.6.1); it no
+                // longer feeds shakaConfig — the Step 0 toggles above drive the actual experiments.
                 if (maxDecodableHeight === null) maxDecodableHeight = computeMaxDecodableHeight();
-                const shakaConfig = Object.assign({}, playbackConfig.shakaConfig);
-                shakaConfig.restrictions = Object.assign({}, shakaConfig.restrictions, { maxHeight: maxDecodableHeight });
-                playbackConfig.shakaConfig = shakaConfig;
-                logError('MPI handler ran → applied restrictions.maxHeight=' + maxDecodableHeight);   // TEMP: confirm the cap is actually set per-(re)load
-            } catch (e) { logError('shaka maxHeight cap failed: ' + e); }
+                if (TEST_ABR_RESTRICTIONS_MAX_HEIGHT > 0) {
+                    const shakaConfig = Object.assign({}, playbackConfig.shakaConfig);
+                    shakaConfig.abr = Object.assign({}, shakaConfig.abr, {
+                        restrictions: Object.assign({}, (shakaConfig.abr || {}).restrictions, {
+                            maxHeight: TEST_ABR_RESTRICTIONS_MAX_HEIGHT,
+                        }),
+                    });
+                    playbackConfig.shakaConfig = shakaConfig;
+                    diag('MPI: set abr.restrictions.maxHeight=' + TEST_ABR_RESTRICTIONS_MAX_HEIGHT);
+                }
+                // Objective "which rung actually loaded" signal (§3.2): log every manifest fetch.
+                playbackConfig.manifestRequestHandler = (requestInfo) => {
+                    try {
+                        lastManifestReqTail = String(requestInfo.url).split('/').slice(-2).join('/');
+                        diag('MANIFEST req: ' + lastManifestReqTail);
+                    } catch (e) {}
+                };
+                // Does manifestHandler fire at all under useShakaForHls (+ optional master filtering)?
+                playbackConfig.manifestHandler = (manifest) => {
+                    try {
+                        const text = String(manifest);
+                        const isMaster = text.indexOf('#EXT-X-STREAM-INF') !== -1;
+                        manifestHandlerSeen = isMaster ? 'master✓' : (manifestHandlerSeen || 'media✓');
+                        if (isMaster && TEST_MANIFEST_FILTER_MAX_HEIGHT > 0) {
+                            diag('manifestHandler: filtering master to ≤' + TEST_MANIFEST_FILTER_MAX_HEIGHT);
+                            return filterMasterByHeight(text, TEST_MANIFEST_FILTER_MAX_HEIGHT);
+                        }
+                    } catch (e) { logError('manifestHandler failed: ' + e); }
+                    return manifest;
+                };
+            } catch (e) { logError('MPI handler failed: ' + e); }
             return playbackConfig;
         });
 
