@@ -322,7 +322,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.25</div>
+    <div id="version">v0.0.26</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -365,10 +365,26 @@
         // / analytics, §6 §12.)
         const errlogEl = el('errlog');
         const errlogLines = [];
+        let lastLoadedUrl = '(none)';   // last media URL seen on LOAD — carried in the error context below
         function logError(line) {
             errlogLines.push('+' + Math.round(nowMs() - t0) + 'ms  ' + line);
             while (errlogLines.length > 12) errlogLines.shift();
-            errlogEl.textContent = errlogLines.join('\n');
+            // Carry the useful debugging info WITH the error: the loaded manifest URL (so it can be read
+            // off the TV screen), the requested audio rendition, the phase, the build, and the device UA
+            // (tells an LG webOS apart from a Chromecast dongle at a glance). Wrapped in try/catch so a
+            // still-uninitialised var can never break the error readout itself.
+            let ctx = '';
+            try {
+                ctx = '\n' + [
+                    '── context ──',
+                    'url:   ' + lastLoadedUrl,
+                    'audio: ' + (desiredAudioLabel || '(none)'),
+                    'phase: ' + (currentPhase || '(none)'),
+                    'build: ' + (el('version') ? el('version').textContent : '?'),
+                    'ua:    ' + navigator.userAgent,
+                ].join('\n');
+            } catch (e) {}
+            errlogEl.textContent = errlogLines.join('\n') + ctx;
             errlogEl.classList.add('show');
         }
 
@@ -630,6 +646,7 @@
             // TEMP (905 probe): show the loaded URL so we can compare a working vs a stuck workout.
             try {
                 const src = (info && (info.contentUrl || info.contentId)) || '(no url)';
+                lastLoadedUrl = src;
                 diag('LOAD_COMPLETE\n  ' + src);
             } catch (e) {}
         });
@@ -698,6 +715,7 @@
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
             let url = '(none)';
             try { url = (req && req.media && (req.media.contentUrl || req.media.contentId)) || '(none)'; } catch (e) {}
+            lastLoadedUrl = url;   // captured on LOAD (fires even if playback later fails) → shown in the error context
             const at = (req && req.currentTime != null) ? Math.round(req.currentTime) : 0;
             diag('LOAD #' + loadCount + ' start@' + at + 's\n  ' + url);
             // Paint the blurred cover NOW, from the LOAD request's customData — it's paint-only (no CORS)
