@@ -258,6 +258,9 @@
 
         /* Receiver build version — bumped on every deploy so we can confirm what's actually running. */
         #version { position: fixed; right: 10px; bottom: 10px; z-index: 9; font: 11px monospace; color: rgba(255,255,255,0.3); pointer-events: none; }
+        /* TEMP (MA-4513 §6.6.1): on-screen readout of the ABR-selected variant + the device height cap, so
+           the device-tiered selection is observable (the test rungs have no burned-in label). Remove with DIAG_FORCE_URL. */
+        #resinfo { position: fixed; left: 10px; top: 10px; z-index: 9; font: 12px/1.45 monospace; color: rgba(120,230,150,0.9); white-space: pre; pointer-events: none; text-shadow: 0 1px 2px #000; }
     </style>
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script src="//www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
@@ -322,7 +325,8 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.31</div>
+    <div id="version">v0.0.32</div>
+    <div id="resinfo"></div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -578,8 +582,27 @@
         }
         function hideError() { errorEl.classList.remove('show'); }
 
+        // TEMP (MA-4513 §6.6.1): show the ABR-selected variant + the device height cap on screen, so the
+        // device-tiered selection is observable (the portrait test rungs are all 9:16 with no burned-in
+        // label → otherwise indistinguishable). '*' marks the active track. Remove with DIAG_FORCE_URL.
+        const resinfoEl = el('resinfo');
+        function updateResInfo() {
+            try {
+                const shaka = playerManager.getShakaPlayer && playerManager.getShakaPlayer();
+                if (!shaka || !shaka.getVariantTracks) { resinfoEl.textContent = ''; return; }
+                const tracks = shaka.getVariantTracks().filter(t => t.width && t.height);
+                if (!tracks.length) { resinfoEl.textContent = ''; return; }
+                const active = tracks.find(t => t.active);
+                const cap = (maxDecodableHeight === null ? '?' : ('≤' + maxDecodableHeight));
+                const sel = active ? (active.width + '×' + active.height) : '—';
+                const avail = tracks.map(t => t.width + '×' + t.height + (t.active ? '*' : '')).join('  ');
+                resinfoEl.textContent = 'playing ' + sel + '   cap ' + cap + '\n[' + avail + ']';
+            } catch (e) {}
+        }
+
         let lastPos = -1, lastAdvanceAt = 0;
         setInterval(() => {
+            updateResInfo();
             // Completion detection: the phone pauses at the very end of the outro, which can land just
             // shy of `ended` firing — so also treat "outro + parked within 0.4 s of duration" as ended,
             // and undo it if playback ever moves back from the end.
