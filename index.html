@@ -325,7 +325,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.36</div>
+    <div id="version">v0.0.37</div>
     <div id="resinfo"></div>
 
     <script>
@@ -372,7 +372,7 @@
         let lastLoadedUrl = '(none)';   // last media URL seen on LOAD — carried in the error context below
         function logError(line) {
             errlogLines.push('+' + Math.round(nowMs() - t0) + 'ms  ' + line);
-            while (errlogLines.length > 12) errlogLines.shift();
+            while (errlogLines.length > 20) errlogLines.shift();
             // Carry the useful debugging info WITH the error: the loaded manifest URL (so it can be read
             // off the TV screen), the requested audio rendition, the phase, the build, and the device UA
             // (tells an LG webOS apart from a Chromecast dongle at a glance). Wrapped in try/catch so a
@@ -586,6 +586,7 @@
         // device-tiered selection is observable (the portrait test rungs are all 9:16 with no burned-in
         // label → otherwise indistinguishable). '*' marks the active track. Remove with DIAG_FORCE_URL.
         const resinfoEl = el('resinfo');
+        let lastActiveWxH = '?';   // last ACTUAL active variant seen by the poll — the real one at error time
         function updateResInfo() {
             try {
                 const shaka = playerManager.getShakaPlayer && playerManager.getShakaPlayer();
@@ -593,6 +594,7 @@
                 const tracks = shaka.getVariantTracks().filter(t => t.width && t.height);
                 if (!tracks.length) { resinfoEl.textContent = ''; return; }
                 const active = tracks.find(t => t.active);
+                if (active && active.width) lastActiveWxH = active.width + '×' + active.height;
                 const cap = (maxDecodableHeight === null ? '?' : ('≤' + maxDecodableHeight));
                 const sel = active ? (active.width + '×' + active.height) : '—';
                 const avail = tracks.map(t => t.width + '×' + t.height + (t.active ? '*' : '')).join('  ');
@@ -757,7 +759,7 @@
             // a shorter rung exists — a network/CORS failure can't occur here; isDecodeError is logged.
             const ceiling = ceilingUnderCap();
             const lower = ladderHeights().filter(h => h < ceiling);
-            logError('decode=' + isDecodeError(event) + ' ceiling=' + ceiling + ' cap=' + (maxDecodableHeight == null ? '∞' : maxDecodableHeight) + ' fb=' + fallbackAttempts + ' lower=[' + lower + ']');
+            logError('decode=' + isDecodeError(event) + ' ACTIVE=' + lastActiveWxH + ' ceiling=' + ceiling + ' cap=' + (maxDecodableHeight == null ? '∞' : maxDecodableHeight) + ' fb=' + fallbackAttempts + ' lower=[' + lower + ']');
             if (lower.length && fallbackAttempts < MAX_FALLBACK_ATTEMPTS) {
                 fallbackAttempts++;
                 maxDecodableHeight = Math.max.apply(null, lower);   // exclude the failed ceiling; allow the next rung down
@@ -890,7 +892,7 @@
                 const shakaConfig = Object.assign({}, playbackConfig.shakaConfig);
                 shakaConfig.restrictions = Object.assign({}, shakaConfig.restrictions, { maxHeight: maxDecodableHeight });
                 playbackConfig.shakaConfig = shakaConfig;
-                diag('ABR maxHeight=' + maxDecodableHeight);
+                logError('MPI handler ran → applied restrictions.maxHeight=' + maxDecodableHeight);   // TEMP: confirm the cap is actually set per-(re)load
             } catch (e) { logError('shaka maxHeight cap failed: ' + e); }
             return playbackConfig;
         });
