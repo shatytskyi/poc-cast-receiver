@@ -322,7 +322,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.24</div>
+    <div id="version">v0.0.25</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -726,13 +726,13 @@
         // / Cast Connect. The phone stays the primary controller.
 
         const options = new cast.framework.CastReceiverOptions();
-        // EXPERIMENT (MA-4513, v0.0.24): useShakaForHls=false → use the native/MPL HLS path instead of
-        // Shaka's MSE transmux, to test whether the LG webOS failure (Shaka 3016 / PIPELINE_ERROR_
-        // COULD_NOT_RENDER) is a Shaka+MSE problem (native should fix it) or a deeper device/codec limit
-        // (native also fails). NOTE: while false, getShakaPlayer() is null, so audio-rendition switching
-        // (applyAudioLabel) no-ops on ALL devices — this build is diagnostic only. Revert to true, or
-        // UA-gate (webOS→native, dongle→Shaka), after the LG test.
-        options.useShakaForHls = false;
+        // useShakaForHls=true is REQUIRED for our TS HLS. Diagnostic v0.0.24 tried native/MPL
+        // (useShakaForHls=false) and it REGRESSED: CAF 411 HLS_MANIFEST_MASTER (empty body) → 905 on the
+        // Chromecast dongle that previously played, and JS/script-error + 15s load-timeout on LG webOS.
+        // So native HLS is NOT the webOS fix. The real difference vs Harna (which casts fine on webOS with
+        // the same Shaka setup) is the segment container: Harna serves fMP4, we serve TS → Shaka transmuxes
+        // TS→fMP4 and webOS MSE rejects that output. Fix is fMP4-from-backend, not a receiver change (§6).
+        options.useShakaForHls = true;
         context.start(options);
     </script>
 </body>
