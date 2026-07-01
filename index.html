@@ -325,7 +325,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.33</div>
+    <div id="version">v0.0.34</div>
     <div id="resinfo"></div>
 
     <script>
@@ -596,7 +596,7 @@
                 const cap = (maxDecodableHeight === null ? '?' : ('≤' + maxDecodableHeight));
                 const sel = active ? (active.width + '×' + active.height) : '—';
                 const avail = tracks.map(t => t.width + '×' + t.height + (t.active ? '*' : '')).join('  ');
-                resinfoEl.textContent = tierProbe + '\nplaying ' + sel + '   cap ' + cap + '\n[' + avail + ']';
+                resinfoEl.textContent = tierProbe + '\nplaying ' + sel + '   cap ' + cap + (fallbackAttempts ? '  fb#' + fallbackAttempts : '') + '\n[' + avail + ']';
             } catch (e) {}
         }
 
@@ -674,6 +674,44 @@
             } catch (e) {}
         });
 
+        // ── MA-4513: decode-error fallback (step DOWN the ABR height cap and reload) ──────────────
+        // canDisplayType can't predict the portrait height limit (a 4K PANEL reports it can show 4K even
+        // when the Cast H.264 decode path caps portrait height at ~1088), so we REACT to the actual decode
+        // failure: on a 3016-class error, drop the cap just below the current tallest allowed rung and
+        // reload at the same spot. Repeat until a rung renders (or we hit the lowest). This is the robust
+        // "fall back to the lowest that plays" — it discovers the tallest DECODABLE rung by trying.
+        const LADDER_HEIGHTS = [1080, 1280, 1920];   // test-ladder rung heights (used if tracks are unreadable post-error)
+        let fallbackAttempts = 0;
+        const MAX_FALLBACK_ATTEMPTS = 6;
+        function isDecodeError(event) {
+            // Shaka 3016 = VIDEO_ERROR / PIPELINE_ERROR_COULD_NOT_RENDER; category 3 = MEDIA.
+            const e = event && event.error;
+            return !!(e && (e.code === 3016 || e.category === 3));
+        }
+        function currentCeilingHeight() {
+            let heights = [];
+            try {
+                const sh = playerManager.getShakaPlayer && playerManager.getShakaPlayer();
+                if (sh && sh.getVariantTracks) heights = sh.getVariantTracks().map(t => t.height).filter(Boolean);
+            } catch (e) {}
+            if (!heights.length) heights = LADDER_HEIGHTS.slice();
+            const cap = (maxDecodableHeight == null) ? Infinity : maxDecodableHeight;
+            const allowed = heights.filter(h => h <= cap);
+            return allowed.length ? Math.max.apply(null, allowed) : Math.max.apply(null, heights);
+        }
+        function reloadWithCurrentCap() {
+            try {
+                const info = playerManager.getMediaInformation && playerManager.getMediaInformation();
+                if (!info) return false;
+                const req = new cast.framework.messages.LoadRequestData();
+                req.media = info;
+                req.autoplay = true;
+                req.currentTime = (typeof lastPos === 'number' && lastPos > 0) ? lastPos : 0;
+                playerManager.load(req);
+                return true;
+            } catch (e) { logError('fallback reload failed: ' + e); return false; }
+        }
+
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
             castDebugLogger.error('Reboot', 'player error: ' + JSON.stringify(event));
             // TEMP (905 probe): surface the failure with CAF/Shaka detail. 905 = LOAD_INTERRUPTED,
@@ -694,6 +732,18 @@
             } catch (x) {}
             diag('ERROR code=' + code + (extra ? '\n  ' + extra : ''));
             logError('media error  code=' + code + (extra ? '  ' + extra : ''));
+            // Decode-error fallback: step the height cap below the current tallest rung and reload, so a
+            // decoder that can't render a tall portrait rung retries a shorter one (MA-4513). Only for
+            // decode (3016/MEDIA) errors — stepping resolution won't fix a network/CORS failure.
+            if (isDecodeError(event)) {
+                const ceiling = currentCeilingHeight();
+                if (ceiling > 1080 && fallbackAttempts < MAX_FALLBACK_ATTEMPTS) {
+                    fallbackAttempts++;
+                    maxDecodableHeight = ceiling - 1;
+                    diag('FALLBACK #' + fallbackAttempts + ': ' + ceiling + ' failed → cap≤' + maxDecodableHeight + ', reloading');
+                    if (reloadWithCurrentCap()) return;   // retrying a shorter rung — don't show the fullscreen error
+                }
+            }
             showError('Playback error', 'The workout video failed to load on the TV.', 'code=' + code + (extra ? '  ·  ' + extra : ''));
         });
 
