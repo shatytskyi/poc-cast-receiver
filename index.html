@@ -322,16 +322,10 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.27</div>
+    <div id="version">v0.0.28</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
-        // TEMP DIAGNOSTIC (MA-4513): when non-empty, the LOAD interceptor force-loads THIS url instead of
-        // the one the phone sent — used to cast a known-good LANDSCAPE Harna stream through OUR receiver to
-        // the LG, isolating content-vs-receiver. If Harna's landscape stream renders here but our portrait
-        // one doesn't, the fault is our content's orientation/encode, not the receiver. Set '' to disable /
-        // REMOVE after the test.
-        const DIAG_FORCE_URL = 'https://cdn-harna-mobile-stage.bodyfitplan.xyz/workout/d0cb7305-afc4-ea07-0ac3-dd651d489068/video/ec63e026-7f27-a8bd-00cb-a639db54c892.m3u8';
         const RING_C = 2 * Math.PI * 46;
 
         const context = cast.framework.CastReceiverContext.getInstance();
@@ -717,13 +711,6 @@
         let loadCount = 0;
         playerManager.setMessageInterceptor(MsgType.LOAD, (req) => {
             loadCount++;
-            // TEMP DIAGNOSTIC (MA-4513): swap in the forced landscape Harna URL to test our receiver's
-            // decode on the LG with landscape content (isolates content vs receiver). REMOVE after the test.
-            if (DIAG_FORCE_URL && req && req.media) {
-                req.media.contentUrl = DIAG_FORCE_URL;
-                req.media.contentId = DIAG_FORCE_URL;
-                diag('DIAG force url → ' + DIAG_FORCE_URL);
-            }
             // A fresh load attempt (incl. a retry): clear any prior error and arm the playback watchdog.
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
             let url = '(none)';
