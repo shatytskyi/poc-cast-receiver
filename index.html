@@ -201,6 +201,12 @@
 
         #idle { position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 3vh; letter-spacing: 0.05em; }
         #idle.hidden { display: none; }
+        /* Load / playback error feedback (MA-4513) — replaces the silent splash-hang with a visible message. */
+        #error { position: fixed; inset: 0; z-index: 7; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 1.6vh; padding: 6vw; text-align: center; background: rgba(8,9,12,0.92); }
+        #error.show { display: flex; }
+        #error .err-title { font-size: clamp(20px, 3.4vw, 40px); font-weight: 700; color: var(--text); }
+        #error .err-sub { font-size: clamp(13px, 1.8vw, 20px); color: var(--text-secondary); max-width: 70vw; line-height: 1.4; }
+        #error .err-code { font: 12px/1.4 monospace; color: var(--faint); max-width: 80vw; word-break: break-word; }
 
         /* Buffering spinner — shown while the video (re)buffers so the TV isn't a frozen/black frame. */
         #spinner {
@@ -265,9 +271,14 @@
     </div>
 
     <div id="idle">MadMuscles</div>
+    <div id="error">
+        <div class="err-title" id="errTitle">Playback error</div>
+        <div class="err-sub" id="errSub"></div>
+        <div class="err-code" id="errCode"></div>
+    </div>
     <div id="spinner"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.17</div>
+    <div id="version">v0.0.18</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -286,6 +297,7 @@
         const timerEl = document.querySelector('.timer');
         const promptBtnEl = el('promptBtn');
         const cardEl = el('card'), cardLabel = el('cardLabel'), cardTitle = el('cardTitle'), cardHint = el('cardHint'), cardHintText = el('cardHintText');
+        const errorEl = el('error'), errTitle = el('errTitle'), errSub = el('errSub'), errCode = el('errCode');
 
         ring.style.strokeDasharray = RING_C.toFixed(1);
 
@@ -476,6 +488,23 @@
         // Natural end of the outro video → celebration card (the phone is paused at the very end).
         videoEl.addEventListener('ended', () => { videoEnded = true; setBuffering(false); updateCard(); });
 
+        // Load / playback error feedback — instead of hanging silently on the splash, show a visible error
+        // and hide the spinner. Two triggers: the CAF ERROR event (explicit failures incl. CORS → shaka
+        // 1002 → CAF 905) and the load timeout in the watchdog below (a silent stall that never fires
+        // ERROR). Cleared on a fresh LOAD and once playback actually advances.
+        let awaitingPlayback = false, loadStartedAt = 0;
+        const LOAD_TIMEOUT_MS = 15000;
+        function showError(title, sub, code) {
+            awaitingPlayback = false;
+            setBuffering(false);
+            idleEl.classList.add('hidden');
+            errTitle.textContent = title;
+            errSub.textContent = sub || '';
+            errCode.textContent = code || '';
+            errorEl.classList.add('show');
+        }
+        function hideError() { errorEl.classList.remove('show'); }
+
         let lastPos = -1, lastAdvanceAt = 0;
         setInterval(() => {
             // Completion detection: the phone pauses at the very end of the outro, which can land just
@@ -490,6 +519,12 @@
                 }
             }
 
+            // LOAD arrived but nothing ever played (a silent stall that never fires ERROR) → surface it
+            // instead of hanging on the splash forever. showError() clears the flag so it fires once.
+            if (awaitingPlayback && loadStartedAt > 0 && (Date.now() - loadStartedAt) > LOAD_TIMEOUT_MS) {
+                showError('Can’t reach the TV', 'The workout video didn’t start. Check the connection and try again.', 'load timeout after ' + (LOAD_TIMEOUT_MS / 1000) + 's');
+            }
+
             // Paused / ended / no data → hide any spinner that a prior waiting/seeking/BUFFERING left
             // showing, so it doesn't linger over the stopped frame, then stop (never spin while paused).
             if (videoEl.paused || videoEl.ended || videoEl.readyState < 1) { setBuffering(false); return; }
@@ -498,6 +533,7 @@
                 lastPos = videoEl.currentTime;
                 lastAdvanceAt = now;
                 setBuffering(false);            // time is moving → really playing
+                if (awaitingPlayback) { awaitingPlayback = false; hideError(); }
             } else if (now - lastAdvanceAt > 500) {
                 setBuffering(true);             // stalled while trying to play → buffering
             }
@@ -528,6 +564,7 @@
         playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
             hasLoaded = true;
             videoEnded = false; updateCard();
+            awaitingPlayback = false; hideError();   // load succeeded — clear the pending-playback watchdog + any error
             // Re-assert skip-next / prev in case the fresh LOAD reset supportedMediaCommands (M4).
             enableRemoteNavCommands();
             const info = playerManager.getMediaInformation && playerManager.getMediaInformation();
@@ -560,6 +597,7 @@
                 }
             } catch (x) {}
             diag('ERROR code=' + code + (extra ? '\n  ' + extra : ''));
+            showError('Playback error', 'The workout video failed to load on the TV.', 'code=' + code + (extra ? '  ·  ' + extra : ''));
         });
 
         // TEMP (MA-4513 error-905 probe): the Back/Home auto-stop (visibilitychange / pagehide →
@@ -587,6 +625,8 @@
         let loadCount = 0;
         playerManager.setMessageInterceptor(MsgType.LOAD, (req) => {
             loadCount++;
+            // A fresh load attempt (incl. a retry): clear any prior error and arm the playback watchdog.
+            awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
             let url = '(none)';
             try { url = (req && req.media && (req.media.contentUrl || req.media.contentId)) || '(none)'; } catch (e) {}
             const at = (req && req.currentTime != null) ? Math.round(req.currentTime) : 0;
@@ -611,11 +651,12 @@
         playerManager.setMessageInterceptor(MsgType.PAUSE, (req) => { diag('>> PAUSE'); return req; });
 
         // MA-4513 M4 — TV-remote next / prev. The remote's skip-forward / skip-back keys reach the
-        // receiver as QUEUE_NEXT / QUEUE_PREV media messages (raw D-pad keys are NOT delivered to a web
-        // receiver). We have no media queue, so instead of the default queue handling we forward the
-        // intent to the phone on the reboot channel and drop the default (return null). The phone then
-        // runs the SAME GoToNext / GoToPrevious it uses for its on-screen buttons and drives the seek
-        // back to us over the media channel — so remote and phone navigation are identical.
+        // receiver as media messages (raw D-pad keys are NOT delivered to a web receiver). IMPORTANT:
+        // the SDK maps QUEUE_NEXT / QUEUE_PREV to a QUEUE_UPDATE with jump = +1 / -1 BEFORE any
+        // interceptor runs, so we must intercept QUEUE_UPDATE (intercepting QUEUE_NEXT/PREV never fires).
+        // We have no media queue, so we forward the intent to the phone on the reboot channel and drop
+        // the default (return null); the phone then runs the SAME GoToNext / GoToPrevious it uses for its
+        // on-screen buttons and drives the seek back to us — so remote and phone navigation are identical.
         const Command = cast.framework.messages.Command;
         function forwardRemoteCommand(command) {
             diag('>> REMOTE ' + command + ' -> phone');
@@ -625,20 +666,31 @@
                 castDebugLogger.warn('Reboot', 'remote command forward failed: ' + e);
             }
         }
-        playerManager.setMessageInterceptor(MsgType.QUEUE_NEXT, () => { forwardRemoteCommand('next'); return null; });
-        playerManager.setMessageInterceptor(MsgType.QUEUE_PREV, () => { forwardRemoteCommand('previous'); return null; });
+        playerManager.setMessageInterceptor(MsgType.QUEUE_UPDATE, (req) => {
+            const jump = req && req.jump;
+            if (jump > 0) { forwardRemoteCommand('next'); return null; }
+            if (jump < 0) { forwardRemoteCommand('previous'); return null; }
+            return req;   // any non-jump queue update (shouldn't happen — no queue) passes through
+        });
 
         // Advertise skip-next / skip-prev so the Google TV remote-control UI enables those affordances
         // (MediaStatus.supportedMediaCommands drives the TV controls). additive: keeps the default
         // PLAY_PAUSE / SEEK that the phone's transport sync (M2) relies on.
         function enableRemoteNavCommands() {
-            playerManager.addSupportedMediaCommands(Command.QUEUE_NEXT | Command.QUEUE_PREV, true);
+            // Guarded: configuring supported commands can throw if called before the context is started,
+            // and an uncaught throw here aborted the whole top-level script so context.start() never ran —
+            // the receiver then hung forever on the splash (the M4 regression). Never let it break startup.
+            try {
+                playerManager.addSupportedMediaCommands(Command.QUEUE_NEXT | Command.QUEUE_PREV, true);
+            } catch (e) {
+                castDebugLogger.warn('Reboot', 'addSupportedMediaCommands failed: ' + e);
+            }
         }
-        enableRemoteNavCommands();
 
         const options = new cast.framework.CastReceiverOptions();
         options.useShakaForHls = true;
         context.start(options);
+        enableRemoteNavCommands();   // AFTER start — the PlayerManager may reject it before the context starts.
     </script>
 </body>
 </html>
