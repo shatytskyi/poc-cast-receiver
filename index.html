@@ -322,7 +322,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.30</div>
+    <div id="version">v0.0.31</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -743,13 +743,52 @@
         // interceptor that lived here were removed. Real D-pad control needs a native Android TV receiver
         // / Cast Connect. The phone stays the primary controller.
 
+        // ── MA-4513: device-tiered rendition selection (portrait frame-height limit) ─────────────
+        // Our workout HLS is PORTRAIT. A 1080p-class Cast decoder (e.g. an LG Chromecast-built-in TV)
+        // caps the decodable frame HEIGHT at ~1088 and rejects taller portrait rungs with Shaka 3016
+        // (PIPELINE_ERROR_COULD_NOT_RENDER); a 4K-class Cast target (Chromecast with Google TV / Google
+        // TV Streamer) decodes the full portrait. PROVEN with same-size-only test streams (plan §6.6).
+        //
+        // canDisplayType is well-defined for LANDSCAPE probes, so classify the device by its H.264
+        // landscape ceiling: a device that decodes 3840x2160 landscape also decodes our tallest portrait
+        // rung (1080x1920 fits inside a 3840x2160 raster); one that can't is height-capped at ~1088. Then
+        // cap Shaka's ABR to maxHeight = the tallest rung this device can decode, applied per-load via
+        // setMediaPlaybackInfoHandler (runs just BEFORE player creation, so ABR never briefly picks an
+        // undecodable rung). ABR then auto-selects the best DECODABLE rung and falls back to the lowest
+        // one on a capped device — no more 3016. (Requires a ladder that HAS a <=1080-tall rung; our test
+        // master does, the real workout manifest does NOT yet — backend must add one, §6.6.)
+        let maxDecodableHeight = null;   // computed lazily on the first load (after context.start)
+        function computeMaxDecodableHeight() {
+            const H264 = 'avc1.640028';   // High@4.0 — matches our test ladder
+            const canDisplay = (w, h) => { try { return !!context.canDisplayType('video/mp4', H264, w, h, 30); } catch (e) { return false; } };
+            const can4k = canDisplay(3840, 2160);      // 4K H.264 -> decodes the full portrait
+            const can1080 = canDisplay(1920, 1080);    // at least 1080p-class
+            // Direct portrait probes — DIAGNOSTIC only (records whether portrait canDisplayType is reliable
+            // on this device; the decision is driven by the reliable landscape probes above):
+            const portraitProbe = [[1080, 1920], [720, 1280], [608, 1080]]
+                .map(r => r[0] + 'x' + r[1] + '=' + (canDisplay(r[0], r[1]) ? 'Y' : 'N')).join(' ');
+            const maxH = can4k ? 1920 : 1080;   // 1080p-class (or lower) -> cap to the <=1080-tall rung
+            diag('decode tier: 4k=' + (can4k ? 'Y' : 'N') + ' 1080=' + (can1080 ? 'Y' : 'N') +
+                '\n  portrait[' + portraitProbe + '] -> maxHeight=' + maxH);
+            return maxH;
+        }
+        playerManager.setMediaPlaybackInfoHandler((loadRequestData, playbackConfig) => {
+            try {
+                if (maxDecodableHeight === null) maxDecodableHeight = computeMaxDecodableHeight();
+                const shakaConfig = Object.assign({}, playbackConfig.shakaConfig);
+                shakaConfig.restrictions = Object.assign({}, shakaConfig.restrictions, { maxHeight: maxDecodableHeight });
+                playbackConfig.shakaConfig = shakaConfig;
+                diag('ABR maxHeight=' + maxDecodableHeight);
+            } catch (e) { logError('shaka maxHeight cap failed: ' + e); }
+            return playbackConfig;
+        });
+
         const options = new cast.framework.CastReceiverOptions();
         // useShakaForHls=true is REQUIRED for our TS HLS. Diagnostic v0.0.24 tried native/MPL
-        // (useShakaForHls=false) and it REGRESSED: CAF 411 HLS_MANIFEST_MASTER (empty body) → 905 on the
-        // Chromecast dongle that previously played, and JS/script-error + 15s load-timeout on LG webOS.
-        // So native HLS is NOT the webOS fix. The real difference vs Harna (which casts fine on webOS with
-        // the same Shaka setup) is the segment container: Harna serves fMP4, we serve TS → Shaka transmuxes
-        // TS→fMP4 and webOS MSE rejects that output. Fix is fMP4-from-backend, not a receiver change (§6).
+        // (useShakaForHls=false) and it REGRESSED (CAF 411 HLS_MANIFEST_MASTER → 905 on the dongle,
+        // JS/script-error + 15s load-timeout on LG). The LG 3016 was later PROVEN to be a decoder
+        // max-HEIGHT limit on portrait, not a container issue (the fMP4 theory was disproven — both we and
+        // Harna serve TS); handled by the device-tiered maxHeight cap above (§6/§6.6).
         options.useShakaForHls = true;
         context.start(options);
     </script>
