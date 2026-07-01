@@ -263,7 +263,7 @@
     <div id="idle">MadMuscles</div>
     <div id="spinner"></div>
     <div id="diag"></div>
-    <div id="version">v0.0.14</div>
+    <div id="version">v0.0.15</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
@@ -518,6 +518,8 @@
         playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
             hasLoaded = true;
             videoEnded = false; updateCard();
+            // Re-assert skip-next / prev in case the fresh LOAD reset supportedMediaCommands (M4).
+            enableRemoteNavCommands();
             const info = playerManager.getMediaInformation && playerManager.getMediaInformation();
             const customData = (info && info.customData) || {};
             applyAudioLabel(desiredAudioLabel || customData.audio);
@@ -597,6 +599,32 @@
             diag('>> SEEK ' + at + 's'); return req;
         });
         playerManager.setMessageInterceptor(MsgType.PAUSE, (req) => { diag('>> PAUSE'); return req; });
+
+        // MA-4513 M4 — TV-remote next / prev. The remote's skip-forward / skip-back keys reach the
+        // receiver as QUEUE_NEXT / QUEUE_PREV media messages (raw D-pad keys are NOT delivered to a web
+        // receiver). We have no media queue, so instead of the default queue handling we forward the
+        // intent to the phone on the reboot channel and drop the default (return null). The phone then
+        // runs the SAME GoToNext / GoToPrevious it uses for its on-screen buttons and drives the seek
+        // back to us over the media channel — so remote and phone navigation are identical.
+        const Command = cast.framework.messages.Command;
+        function forwardRemoteCommand(command) {
+            diag('>> REMOTE ' + command + ' -> phone');
+            try {
+                context.sendCustomMessage(NAMESPACE, undefined, JSON.stringify({ type: 'remoteCommand', command: command }));
+            } catch (e) {
+                castDebugLogger.warn('Reboot', 'remote command forward failed: ' + e);
+            }
+        }
+        playerManager.setMessageInterceptor(MsgType.QUEUE_NEXT, () => { forwardRemoteCommand('next'); return null; });
+        playerManager.setMessageInterceptor(MsgType.QUEUE_PREV, () => { forwardRemoteCommand('previous'); return null; });
+
+        // Advertise skip-next / skip-prev so the Google TV remote-control UI enables those affordances
+        // (MediaStatus.supportedMediaCommands drives the TV controls). additive: keeps the default
+        // PLAY_PAUSE / SEEK that the phone's transport sync (M2) relies on.
+        function enableRemoteNavCommands() {
+            playerManager.addSupportedMediaCommands(Command.QUEUE_NEXT | Command.QUEUE_PREV, true);
+        }
+        enableRemoteNavCommands();
 
         const options = new cast.framework.CastReceiverOptions();
         options.useShakaForHls = true;
