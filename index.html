@@ -202,38 +202,27 @@
         #cardHint .glyph::after { content:""; position:absolute; left:50%; bottom:3px; width:7px; height:2px; transform:translateX(-50%); background:var(--text-secondary); border-radius:2px; }
         #cardHint.hide { display: none; }
 
-        /* Splash / idle — the boot screen: the release "MAD" launcher mark over an orange bloom, on the SAME
-           cover-not-loaded gradient the workout screen uses. On the first overlay message it crossfades out
-           (opacity + slight scale) to reveal the player chrome beneath, so the background is visually
-           continuous (idle → player); the blurred cover then washes in over it. */
+        /* Splash / idle — the boot screen: the release "MAD" launcher mark on the SAME cover-not-loaded
+           gradient the workout screen uses. On the first overlay message it crossfades out (opacity + slight
+           scale) to reveal the player chrome beneath, so the background is visually continuous (idle →
+           player); the blurred cover then washes in over it. */
         #idle {
             position: fixed; inset: 0; z-index: 5; display: grid; place-items: center;
             background: var(--ambient-grad);
             opacity: 1; transition: opacity 560ms ease, transform 560ms ease;
         }
         #idle.hidden { opacity: 0; transform: scale(1.06); pointer-events: none; }
-        #idle.hidden #bloom, #idle.hidden .logo-mad { animation: none; }   /* stop the idle loop once gone */
-        .splash-core { position: relative; display: grid; place-items: center; }
-        /* Orange bloom radiating from under the logo — a soft radial gradient (no blur = cheap on the dongle).
-           The only continuous motion is a slow, compositor-only "breathe" (transform/opacity). */
-        #bloom {
-            position: absolute; width: 190%; aspect-ratio: 1; border-radius: 50%; z-index: 0;
-            background: radial-gradient(circle at 50% 50%,
-                rgba(255,68,0,0.50) 0%, rgba(255,68,0,0.22) 22%, rgba(255,68,0,0.06) 42%, transparent 62%);
-            animation: bloomIn 1100ms cubic-bezier(.2,.7,.2,1) both, breathe 5.5s ease-in-out 1100ms infinite;
-        }
+        #idle.hidden .logo-mad { animation: none; }
+        .splash-core { display: grid; place-items: center; }
         .logo-mad {
-            position: relative; z-index: 1; width: clamp(110px, 17vw, 190px); aspect-ratio: 1;
+            width: clamp(110px, 17vw, 190px); aspect-ratio: 1;
             border-radius: 22%; background: var(--accent); display: grid; place-items: center;
-            box-shadow: 0 18px 60px -18px rgba(255,68,0,0.55);
+            box-shadow: 0 16px 40px -18px rgba(0,0,0,0.55);   /* neutral elevation — no colour glow */
             animation: logoIn 640ms cubic-bezier(.2,.7,.2,1) 140ms both;
         }
         .logo-mad svg { width: 88%; height: 88%; display: block; }
-        @keyframes bloomIn { from { opacity: 0; transform: scale(0.45); } to { opacity: 1; transform: scale(1); } }
         @keyframes logoIn { from { opacity: 0; transform: scale(0.84); } to { opacity: 1; transform: scale(1); } }
-        @keyframes breathe { 0%,100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.06); opacity: 1; } }
         @media (prefers-reduced-motion: reduce) {
-            #bloom { animation: bloomIn 1100ms ease both; }   /* drop the infinite breathe */
             .logo-mad { animation: none; }
         }
         /* Load / playback error feedback (MA-4513) — replaces the silent splash-hang with a visible message. */
@@ -313,7 +302,6 @@
 
     <div id="idle">
         <div class="splash-core">
-            <div id="bloom"></div>
             <div class="logo-mad">
                 <!-- "MAD" release launcher logotype — vector paths lifted from ic_logo_cropped.xml, centered. -->
                 <svg viewBox="0 0 44 44" aria-label="MadMuscles">
@@ -334,7 +322,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.22</div>
+    <div id="version">v0.0.23</div>
 
     <script>
         const NAMESPACE = 'urn:x-cast:com.amomedia.musclemate.reboot';
