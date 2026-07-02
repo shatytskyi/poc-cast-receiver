@@ -118,6 +118,21 @@
             background: #000; border-radius: 10px;
             box-shadow: 0 10px 44px -10px rgba(0,0,0,0.75);
         }
+        /* Poster over the video box (MA-4513): the UN-blurred workout cover, sized/placed IDENTICALLY
+           to #video (same grid cell → they overlap; DOM order paints it on top). Shown on every LOAD
+           (incl. fallback reloads) and hidden only once currentTime actually advances — the same honest
+           "really playing" signal the spinner uses — so the user never sees the black video box while
+           Shaka loads/buffers the first frames. Paint-only CSS background → no CORS involved. The
+           neutral fallback color covers the gap before the cover image itself has loaded. */
+        #videoPoster {
+            grid-column: 2; justify-self: center; align-self: start;
+            margin-top: var(--video-gap);
+            height: 94vh; aspect-ratio: 9 / 16; max-width: 100%;
+            border-radius: 10px; pointer-events: none;
+            background-color: #1E1E1E; background-size: cover; background-position: center;
+            opacity: 0; transition: opacity 420ms ease;
+        }
+        #videoPoster.show { opacity: 1; }
 
         /* Side panels */
         .panel { grid-row: 1; align-self: center; min-width: 0; }
@@ -289,6 +304,7 @@
 
     <div id="stage" class="screen">
         <video id="video" class="castMediaElement"></video>
+        <div id="videoPoster"></div>
 
         <div class="panel left">
             <p class="eyebrow" id="leftEyebrow"></p>
@@ -347,7 +363,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.43</div>
+    <div id="version">v0.0.44</div>
     <div id="resinfo"></div>
 
     <script>
@@ -658,12 +674,19 @@
 
             // Paused / ended / no data → hide any spinner that a prior waiting/seeking/BUFFERING left
             // showing, so it doesn't linger over the stopped frame, then stop (never spin while paused).
-            if (videoEl.paused || videoEl.ended || videoEl.readyState < 1) { setBuffering(false); return; }
+            if (videoEl.paused || videoEl.ended || videoEl.readyState < 1) {
+                // Paused handoff: a deliberately paused video that HAS decodable frames should show its
+                // real parked frame, not the poster (currentTime never advances while paused, so the
+                // advance-based reveal below can't fire).
+                if (videoEl.readyState >= 2) posterEl.classList.remove('show');
+                setBuffering(false); return;
+            }
             const now = Date.now();
             if (videoEl.currentTime > lastPos + 0.05) {
                 lastPos = videoEl.currentTime;
                 lastAdvanceAt = now;
                 setBuffering(false);            // time is moving → really playing
+                posterEl.classList.remove('show');   // frames are rendering — reveal the video
                 if (awaitingPlayback) { awaitingPlayback = false; hideError(); }
             } else if (now - lastAdvanceAt > 500) {
                 setBuffering(true);             // stalled while trying to play → buffering
@@ -673,6 +696,7 @@
         // Blurred workout cover as the frosted-glass ambient. CSS background-image only displays the
         // image (no canvas read), so the cross-origin CDN URL needs no CORS headers.
         const coverEl = el('cover');
+        const posterEl = el('videoPoster');
         let appliedCoverUrl = null;
         function applyCover(url) {
             // Idempotent: both the LOAD interceptor and PLAYER_LOAD_COMPLETE call this; skip the second.
@@ -680,11 +704,13 @@
             appliedCoverUrl = url;
             const safe = url.replace(/'/g, "%27");
             // Preload, then fade in: the CSS background reads the now-cached image and the opacity
-            // transition (0 → 1) animates it in instead of popping instantly.
+            // transition (0 → 1) animates it in instead of popping instantly. The same image feeds the
+            // blurred ambient AND the un-blurred video poster.
             const pre = new Image();
             pre.onload = () => {
                 coverEl.style.backgroundImage = "url('" + safe + "')";
                 coverEl.style.opacity = '1';
+                posterEl.style.backgroundImage = "url('" + safe + "')";
             };
             pre.src = url;
         }
@@ -896,6 +922,8 @@
             capturedLoadRequest = req;   // keep the request so the decode-fallback can reload without getMediaInformation()
             // A fresh load attempt (incl. a retry): clear any prior error and arm the playback watchdog.
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
+            // Cover the (black) video box with the poster until this load actually renders frames.
+            posterEl.classList.add('show');
             let url = '(none)';
             try { url = (req && req.media && (req.media.contentUrl || req.media.contentId)) || '(none)'; } catch (e) {}
             lastLoadedUrl = url;   // captured on LOAD (fires even if playback later fails) → shown in the error context
