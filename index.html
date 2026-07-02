@@ -325,7 +325,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.39</div>
+    <div id="version">v0.0.40</div>
     <div id="resinfo"></div>
 
     <script>
@@ -937,8 +937,11 @@
         // TEMP toggles for the review doc §6 Step 0/1 verification session. Each candidate mechanism is
         // applied only when its toggle is non-zero so the experiments stay isolated. Switching = flip a
         // toggle + bump #version + redeploy (session part A = abr restrictions, part B = manifest filter).
-        const TEST_ABR_RESTRICTIONS_MAX_HEIGHT = 1080;   // candidate 1 (§3.2 re-test): soft ABR-level cap
-        const TEST_MANIFEST_FILTER_MAX_HEIGHT = 0;       // candidate 2 (§3.4): master-playlist text filter
+        // Part A result (LG, v0.0.39, 2026-07-02): abr.restrictions.maxHeight=1080 CONFIRMED on the live
+        // instance (cfg: abr.maxH=1080) yet ABR still picked 1080×1920 → 3016. Genuinely inert on this
+        // runtime (CAF 3.0.0137, shaka v4.9.2-caf2 fork) — candidate 1 is dead; toggle left off.
+        const TEST_ABR_RESTRICTIONS_MAX_HEIGHT = 0;      // candidate 1 (§3.2 re-test): DEAD, see above
+        const TEST_MANIFEST_FILTER_MAX_HEIGHT = 1080;    // candidate 2 (§3.4): master-playlist text filter — Part B
 
         // Strips #EXT-X-STREAM-INF (and #EXT-X-I-FRAME-STREAM-INF) variants taller than `cap` from a
         // MASTER playlist text. Every #EXT-X-MEDIA line survives — the audio renditions must never be
