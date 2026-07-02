@@ -118,6 +118,24 @@
             background: #000; border-radius: 10px;
             box-shadow: 0 10px 44px -10px rgba(0,0,0,0.75);
         }
+        /* Poster over the video box (MA-4513, v0.0.53 retry): the UN-blurred workout cover, sized and
+           placed IDENTICALLY to #video. grid-row: 1 is REQUIRED — with only a column set, auto-placement
+           would park it in an implicit row 2 below the video (the v0.0.44 bug). Shown on every LOAD,
+           hidden ONLY on proven playback (see the poll's poster block — the v0.0.48 reveal had a false
+           positive at currentTime=0). Until the cover image downloads (it only starts at LOAD), the
+           fallback is the branded ambient gradient, not a flat near-black. Paint-only, no CORS. */
+        #videoPoster {
+            grid-column: 2; grid-row: 1; justify-self: center; align-self: start;
+            margin-top: var(--video-gap);
+            height: 94vh; aspect-ratio: 9 / 16; max-width: 100%;
+            border-radius: 10px; pointer-events: none;
+            background-color: #121212;
+            background-image: var(--ambient-grad);
+            background-size: cover; background-position: center;
+            opacity: 0; transition: opacity 420ms ease;
+        }
+        #videoPoster.show { opacity: 1; }
+
         /* Side panels */
         .panel { grid-row: 1; align-self: center; min-width: 0; }
         .panel.left { grid-column: 1; padding-right: 3%; }
@@ -322,6 +340,7 @@
 
     <div id="stage" class="screen">
         <video id="video" class="castMediaElement"></video>
+        <div id="videoPoster"></div>
 
         <div class="panel left">
             <p class="eyebrow" id="leftEyebrow"></p>
@@ -380,7 +399,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.52</div>
+    <div id="version">v0.0.53</div>
     <div id="resinfo"></div>
 
     <script>
@@ -630,6 +649,9 @@
         // 1002 → CAF 905) and the load timeout in the watchdog below (a silent stall that never fires
         // ERROR). Cleared on a fresh LOAD and once playback actually advances.
         let awaitingPlayback = false, loadStartedAt = 0;
+        // Poster state, reset per LOAD (v0.0.53): the reveal baseline is captured within the
+        // CURRENT load's first playable tick — never compared against another load's position.
+        let posterBasePos = null, posterAutoplay = true;
         const LOAD_TIMEOUT_MS = 15000;
         function showError(title, sub, code) {
             awaitingPlayback = false;
@@ -692,6 +714,25 @@
 
             // Paused / ended / no data → hide any spinner that a prior waiting/seeking/BUFFERING left
             // showing, so it doesn't linger over the stopped frame, then stop (never spin while paused).
+            // Poster reveal (v0.0.53) — hide ONLY on PROVEN playback: currentTime must move ≥0.2 s
+            // beyond a baseline captured on THIS load's first playable tick. (The v0.0.48 reveal
+            // compared against the module-global lastPos initialized to -1, so position 0 counted
+            // as "advancing" and stripped the poster ~250 ms into every load, pre-frames — the
+            // black-box bug that survived three fixes.) A jump > 2 s between ticks is a seek, not
+            // playback → re-baseline instead of revealing. A deliberately paused (non-autoplay)
+            // handoff reveals its decodable parked frame at readyState ≥ 2.
+            if (posterEl.classList.contains('show') && videoEl.readyState >= 2) {
+                if (videoEl.paused) {
+                    if (!posterAutoplay) posterEl.classList.remove('show');
+                } else if (posterBasePos === null) {
+                    posterBasePos = videoEl.currentTime;
+                } else {
+                    const advanced = videoEl.currentTime - posterBasePos;
+                    if (advanced > 2 || advanced < 0) posterBasePos = videoEl.currentTime;
+                    else if (advanced > 0.2) posterEl.classList.remove('show');
+                }
+            }
+
             if (videoEl.paused || videoEl.ended || videoEl.readyState < 1) {
                 setBuffering(false); return;
             }
@@ -709,6 +750,7 @@
         // Blurred workout cover as the frosted-glass ambient. CSS background-image only displays the
         // image (no canvas read), so the cross-origin CDN URL needs no CORS headers.
         const coverEl = el('cover');
+        const posterEl = el('videoPoster');
         let appliedCoverUrl = null;
         function applyCover(url) {
             // Idempotent: both the LOAD interceptor and PLAYER_LOAD_COMPLETE call this; skip the second.
@@ -721,6 +763,7 @@
             pre.onload = () => {
                 coverEl.style.backgroundImage = "url('" + safe + "')";
                 coverEl.style.opacity = '1';
+                posterEl.style.backgroundImage = "url('" + safe + "')";   // un-blurred copy in the video box
             };
             pre.src = url;
         }
@@ -932,6 +975,10 @@
             capturedLoadRequest = req;   // keep the request so the decode-fallback can reload without getMediaInformation()
             // A fresh load attempt (incl. a retry): clear any prior error and arm the playback watchdog.
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
+            // Cover the video box with the poster until THIS load proves playback; reset its baseline.
+            posterEl.classList.add('show');
+            posterBasePos = null;
+            posterAutoplay = (req && req.autoplay) !== false;   // undefined → CAF defaults to autoplay
             let url = '(none)';
             try { url = (req && req.media && (req.media.contentUrl || req.media.contentId)) || '(none)'; } catch (e) {}
             lastLoadedUrl = url;   // captured on LOAD (fires even if playback later fails) → shown in the error context
