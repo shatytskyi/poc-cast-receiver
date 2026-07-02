@@ -202,6 +202,20 @@
         #cardHint .glyph::after { content:""; position:absolute; left:50%; bottom:3px; width:7px; height:2px; transform:translateX(-50%); background:var(--text-secondary); border-radius:2px; }
         #cardHint.hide { display: none; }
 
+        /* Universal "act on the phone" gate (MA-4513): full-screen scrim card shown whenever the overlay
+           message carries actionRequired=true (an actionable dialog is open on the phone — feedback
+           question, quit confirmation, any future dialog). ONE message for ALL gates. Sits BELOW the
+           completion card (#card z7) so completion always wins; the idle splash (fixed, above #stage)
+           covers it on boot. */
+        #gate {
+            position: absolute; inset: 0; z-index: 6; display: none; flex-direction: column; align-items: center; justify-content: center;
+            gap: 2.4vh; background: var(--on-light-heavy); text-align: center;
+        }
+        #gate.show { display: flex; }
+        #gate .gate-glyph { width: 34px; height: 52px; border: 3px solid var(--text); border-radius: 8px; position: relative; flex: none; }
+        #gate .gate-glyph::after { content: ""; position: absolute; left: 50%; bottom: 6px; width: 12px; height: 3px; transform: translateX(-50%); background: var(--text); border-radius: 2px; }
+        #gateTitle { margin: 0; font-size: clamp(24px, 4vw, 44px); font-weight: 700; letter-spacing: -0.02em; }
+
         /* Splash / idle — the boot screen: the release "MAD" launcher mark on the SAME cover-not-loaded
            gradient the workout screen uses. On the first overlay message it crossfades out (opacity + slight
            scale) to reveal the player chrome beneath, so the background is visually continuous (idle →
@@ -301,6 +315,11 @@
             <h1 id="cardTitle"></h1>
             <div id="cardHint"><span class="glyph"></span><span id="cardHintText"></span></div>
         </div>
+
+        <div id="gate">
+            <div class="gate-glyph"></div>
+            <h1 id="gateTitle">Continue on your phone</h1>
+        </div>
     </div>
 
     <div id="idle">
@@ -325,7 +344,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.41</div>
+    <div id="version">v0.0.42</div>
     <div id="resinfo"></div>
 
     <script>
@@ -345,6 +364,7 @@
         const timerEl = document.querySelector('.timer');
         const promptBtnEl = el('promptBtn');
         const cardEl = el('card'), cardLabel = el('cardLabel'), cardTitle = el('cardTitle'), cardHint = el('cardHint'), cardHintText = el('cardHintText');
+        const gateEl = el('gate');
         const errorEl = el('error'), errTitle = el('errTitle'), errSub = el('errSub'), errCode = el('errCode');
 
         ring.style.strokeDasharray = RING_C.toFixed(1);
@@ -504,6 +524,9 @@
             chipEl.textContent = d.workoutTitle || '';
             renderSegments(d.segments || []);
             renderPanels(d);
+            // Universal action gate: the phone says "the user must act here" — show the one-size-fits-all
+            // card. Driven purely by the flag; the completion card (z7) covers it when both are up.
+            gateEl.classList.toggle('show', d.actionRequired === true);
             updateCard();
         }
 
