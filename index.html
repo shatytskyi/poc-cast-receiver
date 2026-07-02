@@ -125,14 +125,19 @@
            to #video (same grid cell → they overlap; DOM order paints it on top). Shown on every LOAD
            (incl. fallback reloads) and hidden only once currentTime actually advances — the same honest
            "really playing" signal the spinner uses — so the user never sees the black video box while
-           Shaka loads/buffers the first frames. Paint-only CSS background → no CORS involved. The
-           neutral fallback color covers the gap before the cover image itself has loaded. */
+           Shaka loads/buffers the first frames. Paint-only CSS background → no CORS involved.
+           Until the cover image itself finishes downloading (it only STARTS at LOAD, so the first
+           1–3 s of a session have no image yet) the fallback is the BRANDED ambient gradient — the
+           same surface the splash sits on — not a flat near-black, which read as "the black video
+           box is still there" (v0.0.51). JS later overrides background-image with the cover url. */
         #videoPoster {
             grid-column: 2; grid-row: 1; justify-self: center; align-self: start;
             margin-top: var(--video-gap);
             height: 94vh; aspect-ratio: 9 / 16; max-width: 100%;
             border-radius: 10px; pointer-events: none;
-            background-color: #1E1E1E; background-size: cover; background-position: center;
+            background-color: #121212;
+            background-image: var(--ambient-grad);
+            background-size: cover; background-position: center;
             opacity: 0; transition: opacity 420ms ease;
         }
         #videoPoster.show { opacity: 1; }
@@ -396,7 +401,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.50</div>
+    <div id="version">v0.0.51</div>
     <div id="resinfo"></div>
 
     <script>
