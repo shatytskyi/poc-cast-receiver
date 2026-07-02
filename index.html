@@ -165,11 +165,14 @@
         /* Right-panel action prompt (intro → Start workout, outro → Complete): mirrors the phone's
            primaryLarge button (accent fill, white labelLarge, radius-large, trailing arrow) + a quiet
            "tap on your phone" hint with a phone glyph. Shown in place of the timer. */
-        #rightPrompt { display: none; flex-direction: column; align-items: center; gap: 1.8vh; max-width: 26vw; }
+        #rightPrompt { display: none; flex-direction: column; align-items: center; gap: 1.8vh; width: 100%; }
         .right.show-prompt .timer { display: none; }
         .right.show-prompt #rightPrompt { display: flex; }
+        /* Full width of the right panel (the panel's own padding provides the side insets),
+           like the phone's edge-to-edge primary button; label + arrow stay centered as a group. */
         .cta {
-            display: inline-flex; align-items: center; gap: 10px; min-height: 48px; padding: 1.3vh 3vh;
+            display: flex; justify-content: center; width: 100%; box-sizing: border-box;
+            align-items: center; gap: 10px; min-height: 48px; padding: 1.3vh 3vh;
             background: var(--accent); color: var(--text); border-radius: var(--r-l);
             font-size: clamp(16px, 2vw, 22px); font-weight: 600; letter-spacing: -0.01em; white-space: nowrap;
         }
@@ -375,7 +378,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.46</div>
+    <div id="version">v0.0.47</div>
     <div id="resinfo"></div>
 
     <script>
