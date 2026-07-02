@@ -126,6 +126,12 @@
            fallback is the branded ambient gradient, not a flat near-black. Paint-only, no CORS. */
         #videoPoster {
             grid-column: 2; grid-row: 1; justify-self: center; align-self: start;
+            /* position + positive z-index are REQUIRED on this dongle, not stylistic (v0.0.54): the
+               TV compositor promotes <video> to its own hardware plane, and a plain-flow sibling
+               does NOT reliably paint over it even when DOM-later — the same hard-won rule every
+               other overlay here (spinner, gate, errlog) already follows. Without this the poster
+               rendered fine on desktop Chrome and sat invisibly UNDER the video plane on device. */
+            position: relative; z-index: 5;
             margin-top: var(--video-gap);
             height: 94vh; aspect-ratio: 9 / 16; max-width: 100%;
             border-radius: 10px; pointer-events: none;
@@ -234,7 +240,7 @@
                not to feel pinned to the top. The big phone glyph hangs right below the title and MAY
                be partially covered by the system overlay — accepted; only the text must stay visible. */
             position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-            gap: 2.4vh; text-align: center;
+            gap: 5vh; text-align: center;   /* the flex gap IS the text→glyph inset; must equal the glyph's bottom inset */
             /* Layered scrim (a flat 60% dim washed out over bright/white workout frames): a radial
                pool of near-black centered on the content (title + glyph) guarantees text contrast
                over ANY frame (~95% opaque behind the message), easing to ~60% at the edges so the
@@ -257,11 +263,14 @@
             font-size: clamp(24px, 4vw, 44px); font-weight: 700; letter-spacing: -0.02em;
             text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
         }
-        /* Big phone glyph (~3x the v0.0.50 size) tucked close under the title; inner proportions in
-           %/aspect-ratio so it scales as one shape. Its lower part sitting in the system-overlay zone
-           is fine — it's decoration, not information. */
+        /* Phone glyph fills the space left below the title band down to the screen bottom, with
+           EQUAL insets on both sides of it (owner spec, v0.0.54): the title band ends at 42.4vh
+           (34vh margin + 8.4vh band), the two insets are 5vh each (the flex gap above + the free
+           space below) → glyph height = 100 − 42.4 − 2×5 = 47.6vh. Height-driven + aspect-ratio,
+           so it always fits the screen whole — no more bottom clipping. It may still sit under the
+           system pause overlay when that slides up — fine, it's decoration, not information. */
         #gate .gate-glyph {
-            width: clamp(228px, 21vw, 384px); aspect-ratio: 34 / 52;
+            height: 47.6vh; width: auto; aspect-ratio: 34 / 52;
             border: 10px solid var(--text); border-radius: 40px; position: relative; flex: none;
             filter: drop-shadow(0 8px 34px rgba(0,0,0,0.55));
         }
@@ -399,7 +408,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.53</div>
+    <div id="version">v0.0.54</div>
     <div id="resinfo"></div>
 
     <script>
