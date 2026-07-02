@@ -381,7 +381,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.48</div>
+    <div id="version">v0.0.49</div>
     <div id="resinfo"></div>
 
     <script>
@@ -495,10 +495,11 @@
                     // earlier rest video-dim caused a compositor stall on the dongle and was removed, §5.1.)
                     title = 'Rest'; sub = d.nextTitle ? 'Next up · ' + d.nextTitle : 'Catch your breath'; rightMode = 'timer'; break;
                 case 'intro':
-                    // Intro VIDEO stays visible; the call-to-action is the prominent right-panel prompt,
-                    // labelled with the phone's exact button text.
+                    // Intro is a passive phase now: while casting the workout AUTO-STARTS when the intro
+                    // ends (sender-side, MA-4513), so the old "tap Start workout on your phone" prompt
+                    // would ask for a tap that is no longer needed. Just name the phase, like Preview.
                     eyebrow = 'Get started'; title = d.workoutTitle || 'Workout';
-                    rightMode = 'prompt'; promptBtn = 'Start workout'; break;
+                    rightMode = 'label'; rightLabel = 'Intro'; break;
                 case 'outro':
                     eyebrow = 'Almost done'; title = d.workoutTitle || '';
                     rightMode = 'prompt'; promptBtn = 'Complete'; break;
