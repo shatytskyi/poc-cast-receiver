@@ -272,9 +272,12 @@
 
         /* Receiver build version — bumped on every deploy so we can confirm what's actually running. */
         #version { position: fixed; right: 10px; bottom: 10px; z-index: 9; font: 11px monospace; color: rgba(255,255,255,0.3); pointer-events: none; }
-        /* TEMP (MA-4513 §6.6.1): on-screen readout of the ABR-selected variant + the device height cap, so
-           the device-tiered selection is observable (the test rungs have no burned-in label). Remove with DIAG_FORCE_URL. */
-        #resinfo { position: fixed; left: 10px; top: 10px; z-index: 9; font: 12px/1.45 monospace; color: rgba(120,230,150,0.9); white-space: pre; pointer-events: none; text-shadow: 0 1px 2px #000; }
+        /* TEMP (MA-4513 §6.6.1): on-screen readout of the ABR-selected variant + the device cap, so the
+           device-tiered selection is observable. HIDDEN by default (2026-07-02, owner) — flip to
+           display:block when diagnosing. pre-wrap + break-word: a real prod ladder's variant list is
+           longer than one line. NOTE: updateResInfo() keeps RUNNING even while hidden — it maintains
+           lastActiveWxH/lastActiveHeightNum, which the decode-error fallback reads. */
+        #resinfo { display: none; position: fixed; left: 10px; top: 10px; z-index: 9; max-width: 46vw; font: 12px/1.45 monospace; color: rgba(120,230,150,0.9); white-space: pre-wrap; word-break: break-word; pointer-events: none; text-shadow: 0 1px 2px #000; }
     </style>
     <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
     <script src="//www.gstatic.com/cast/sdk/libs/devtools/debug_layer/caf_receiver_logger.js"></script>
@@ -344,7 +347,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.42</div>
+    <div id="version">v0.0.43</div>
     <div id="resinfo"></div>
 
     <script>
