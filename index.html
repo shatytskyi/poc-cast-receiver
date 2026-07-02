@@ -109,9 +109,6 @@
         #video::-webkit-media-controls-enclosure,
         #video::-webkit-media-controls-panel { display: none !important; -webkit-appearance: none !important; }
         #video {
-            /* grid-row: 1 is REQUIRED, not decorative: with only a column set, grid auto-placement
-               puts the SECOND column-2 item (#videoPoster) into an implicit row 2 below the video
-               instead of overlapping it — which silently killed the poster in v0.0.44. */
             grid-column: 2; grid-row: 1; justify-self: center; align-self: start;
             margin-top: var(--video-gap);   /* double gap on top (room for the top progress bar) */
             /* Explicit vh height + aspect-ratio is the combo that actually RENDERS on the dongle.
@@ -121,27 +118,6 @@
             background: #000; border-radius: 10px;
             box-shadow: 0 10px 44px -10px rgba(0,0,0,0.75);
         }
-        /* Poster over the video box (MA-4513): the UN-blurred workout cover, sized/placed IDENTICALLY
-           to #video (same grid cell → they overlap; DOM order paints it on top). Shown on every LOAD
-           (incl. fallback reloads) and hidden only once currentTime actually advances — the same honest
-           "really playing" signal the spinner uses — so the user never sees the black video box while
-           Shaka loads/buffers the first frames. Paint-only CSS background → no CORS involved.
-           Until the cover image itself finishes downloading (it only STARTS at LOAD, so the first
-           1–3 s of a session have no image yet) the fallback is the BRANDED ambient gradient — the
-           same surface the splash sits on — not a flat near-black, which read as "the black video
-           box is still there" (v0.0.51). JS later overrides background-image with the cover url. */
-        #videoPoster {
-            grid-column: 2; grid-row: 1; justify-self: center; align-self: start;
-            margin-top: var(--video-gap);
-            height: 94vh; aspect-ratio: 9 / 16; max-width: 100%;
-            border-radius: 10px; pointer-events: none;
-            background-color: #121212;
-            background-image: var(--ambient-grad);
-            background-size: cover; background-position: center;
-            opacity: 0; transition: opacity 420ms ease;
-        }
-        #videoPoster.show { opacity: 1; }
-
         /* Side panels */
         .panel { grid-row: 1; align-self: center; min-width: 0; }
         .panel.left { grid-column: 1; padding-right: 3%; }
@@ -234,18 +210,20 @@
            completion card (#card z7) so completion always wins; the idle splash (fixed, above #stage)
            covers it on boot. */
         #gate {
-            /* Content lives in the UPPER part of the screen: the gate usually pauses playback, and
-               the Android TV system pause overlay slides up from the BOTTOM over our UI — anything
-               low would be covered. Title centered within the top third, big phone glyph below it. */
+            /* Vertical rhythm = the GOLDEN SECTION of the screen height (owner spec): the two golden
+               lines sit at 38.2vh and 61.8vh. The title is centered ON the upper line — high enough
+               that the bottom-rising Android TV system pause overlay can never cover it, low enough
+               not to feel pinned to the top. The big phone glyph hangs right below the title and MAY
+               be partially covered by the system overlay — accepted; only the text must stay visible. */
             position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-            gap: 1.6vh; text-align: center;
+            gap: 2.4vh; text-align: center;
             /* Layered scrim (a flat 60% dim washed out over bright/white workout frames): a radial
-               pool of near-black weighted toward the UPPER half (where the content now sits)
-               guarantees text contrast over ANY frame (~95% opaque behind the message), easing to
-               ~60% at the edges so the paused workout stays faintly visible for context.
+               pool of near-black centered on the content (title + glyph) guarantees text contrast
+               over ANY frame (~95% opaque behind the message), easing to ~60% at the edges so the
+               paused workout stays faintly visible for context.
                Paint-only — NO backdrop blur (dongle perf, §7). */
             background:
-                radial-gradient(ellipse 90% 70% at 50% 30%, rgba(10, 11, 13, 0.92) 0%, rgba(10, 11, 13, 0.80) 45%, rgba(10, 11, 13, 0.35) 100%),
+                radial-gradient(ellipse 90% 70% at 50% 42%, rgba(10, 11, 13, 0.92) 0%, rgba(10, 11, 13, 0.80) 45%, rgba(10, 11, 13, 0.35) 100%),
                 rgba(18, 18, 18, 0.38);
             /* Compositor-only fade instead of a hard pop; visibility keeps it out of hit-testing/paint
                when hidden. TV pacing: big-screen transitions read too abrupt at phone speeds, so the
@@ -254,20 +232,22 @@
             transition: opacity 550ms ease, visibility 0s linear 550ms;
         }
         #gate.show { opacity: 1; visibility: visible; transition: opacity 550ms ease; }
-        /* The title's band IS the top third: the flex line centers the text inside it. */
+        /* An 8.4vh flex band whose center sits exactly on the upper golden line:
+           34vh (margin) + 8.4vh/2 = 38.2vh. */
         #gateTitle {
-            margin: 0; height: 33.4vh; display: flex; align-items: center; justify-content: center;
+            margin: 34vh 0 0; height: 8.4vh; display: flex; align-items: center; justify-content: center;
             font-size: clamp(24px, 4vw, 44px); font-weight: 700; letter-spacing: -0.02em;
             text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
         }
-        /* Big phone glyph right under the top-third band (scaled ~2.5x from the original 34×52;
-           inner proportions in %/aspect-ratio so it scales as one shape). */
+        /* Big phone glyph (~3x the v0.0.50 size) tucked close under the title; inner proportions in
+           %/aspect-ratio so it scales as one shape. Its lower part sitting in the system-overlay zone
+           is fine — it's decoration, not information. */
         #gate .gate-glyph {
-            width: clamp(76px, 7vw, 128px); aspect-ratio: 34 / 52;
-            border: 4px solid var(--text); border-radius: 16px; position: relative; flex: none;
-            filter: drop-shadow(0 4px 18px rgba(0,0,0,0.55));
+            width: clamp(228px, 21vw, 384px); aspect-ratio: 34 / 52;
+            border: 10px solid var(--text); border-radius: 40px; position: relative; flex: none;
+            filter: drop-shadow(0 8px 34px rgba(0,0,0,0.55));
         }
-        #gate .gate-glyph::after { content: ""; position: absolute; left: 50%; bottom: 8%; width: 34%; height: 4px; transform: translateX(-50%); background: var(--text); border-radius: 2px; }
+        #gate .gate-glyph::after { content: ""; position: absolute; left: 50%; bottom: 7%; width: 34%; height: 10px; transform: translateX(-50%); background: var(--text); border-radius: 5px; }
 
         /* Splash / idle — the boot screen: the release "MAD" launcher mark on the SAME cover-not-loaded
            gradient the workout screen uses. On the first overlay message it crossfades out (opacity + slight
@@ -342,7 +322,6 @@
 
     <div id="stage" class="screen">
         <video id="video" class="castMediaElement"></video>
-        <div id="videoPoster"></div>
 
         <div class="panel left">
             <p class="eyebrow" id="leftEyebrow"></p>
@@ -401,7 +380,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.51</div>
+    <div id="version">v0.0.52</div>
     <div id="resinfo"></div>
 
     <script>
@@ -651,9 +630,6 @@
         // 1002 → CAF 905) and the load timeout in the watchdog below (a silent stall that never fires
         // ERROR). Cleared on a fresh LOAD and once playback actually advances.
         let awaitingPlayback = false, loadStartedAt = 0;
-        // Poster-reveal state, reset per LOAD: whether this load is expected to start playing on its
-        // own (autoplay) and whether it has actually rendered advancing frames yet.
-        let loadWasAutoplay = true, hasPlayedThisLoad = false;
         const LOAD_TIMEOUT_MS = 15000;
         function showError(title, sub, code) {
             awaitingPlayback = false;
@@ -717,24 +693,13 @@
             // Paused / ended / no data → hide any spinner that a prior waiting/seeking/BUFFERING left
             // showing, so it doesn't linger over the stopped frame, then stop (never spin while paused).
             if (videoEl.paused || videoEl.ended || videoEl.readyState < 1) {
-                // Paused handoff: a deliberately paused video that HAS decodable frames should show its
-                // real parked frame, not the poster (currentTime never advances while paused, so the
-                // advance-based reveal below can't fire). Gated on "not an in-flight autoplay load":
-                // during a normal autoplay LOAD the element is still `paused` while readyState can
-                // already be ≥ 2, and revealing there stripped the poster before the first frame
-                // painted (the v0.0.44 black-frame regression, part 2).
-                if (videoEl.readyState >= 2 && (hasPlayedThisLoad || !loadWasAutoplay)) {
-                    posterEl.classList.remove('show');
-                }
                 setBuffering(false); return;
             }
             const now = Date.now();
             if (videoEl.currentTime > lastPos + 0.05) {
                 lastPos = videoEl.currentTime;
                 lastAdvanceAt = now;
-                hasPlayedThisLoad = true;
                 setBuffering(false);            // time is moving → really playing
-                posterEl.classList.remove('show');   // frames are rendering — reveal the video
                 if (awaitingPlayback) { awaitingPlayback = false; hideError(); }
             } else if (now - lastAdvanceAt > 500) {
                 setBuffering(true);             // stalled while trying to play → buffering
@@ -744,7 +709,6 @@
         // Blurred workout cover as the frosted-glass ambient. CSS background-image only displays the
         // image (no canvas read), so the cross-origin CDN URL needs no CORS headers.
         const coverEl = el('cover');
-        const posterEl = el('videoPoster');
         let appliedCoverUrl = null;
         function applyCover(url) {
             // Idempotent: both the LOAD interceptor and PLAYER_LOAD_COMPLETE call this; skip the second.
@@ -752,13 +716,11 @@
             appliedCoverUrl = url;
             const safe = url.replace(/'/g, "%27");
             // Preload, then fade in: the CSS background reads the now-cached image and the opacity
-            // transition (0 → 1) animates it in instead of popping instantly. The same image feeds the
-            // blurred ambient AND the un-blurred video poster.
+            // transition (0 → 1) animates it in instead of popping instantly.
             const pre = new Image();
             pre.onload = () => {
                 coverEl.style.backgroundImage = "url('" + safe + "')";
                 coverEl.style.opacity = '1';
-                posterEl.style.backgroundImage = "url('" + safe + "')";
             };
             pre.src = url;
         }
@@ -970,10 +932,6 @@
             capturedLoadRequest = req;   // keep the request so the decode-fallback can reload without getMediaInformation()
             // A fresh load attempt (incl. a retry): clear any prior error and arm the playback watchdog.
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
-            // Cover the (black) video box with the poster until this load actually renders frames.
-            posterEl.classList.add('show');
-            loadWasAutoplay = (req && req.autoplay) !== false;   // undefined → CAF defaults to autoplay
-            hasPlayedThisLoad = false;
             let url = '(none)';
             try { url = (req && req.media && (req.media.contentUrl || req.media.contentId)) || '(none)'; } catch (e) {}
             lastLoadedUrl = url;   // captured on LOAD (fires even if playback later fails) → shown in the error context
