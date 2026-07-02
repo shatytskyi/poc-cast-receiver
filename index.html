@@ -109,7 +109,10 @@
         #video::-webkit-media-controls-enclosure,
         #video::-webkit-media-controls-panel { display: none !important; -webkit-appearance: none !important; }
         #video {
-            grid-column: 2; justify-self: center; align-self: start;
+            /* grid-row: 1 is REQUIRED, not decorative: with only a column set, grid auto-placement
+               puts the SECOND column-2 item (#videoPoster) into an implicit row 2 below the video
+               instead of overlapping it — which silently killed the poster in v0.0.44. */
+            grid-column: 2; grid-row: 1; justify-self: center; align-self: start;
             margin-top: var(--video-gap);   /* double gap on top (room for the top progress bar) */
             /* Explicit vh height + aspect-ratio is the combo that actually RENDERS on the dongle.
                (height:100% of a grid track, or width:auto without an aspect, left the video black.)
@@ -125,7 +128,7 @@
            Shaka loads/buffers the first frames. Paint-only CSS background → no CORS involved. The
            neutral fallback color covers the gap before the cover image itself has loaded. */
         #videoPoster {
-            grid-column: 2; justify-self: center; align-self: start;
+            grid-column: 2; grid-row: 1; justify-self: center; align-self: start;
             margin-top: var(--video-gap);
             height: 94vh; aspect-ratio: 9 / 16; max-width: 100%;
             border-radius: 10px; pointer-events: none;
@@ -378,7 +381,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.47</div>
+    <div id="version">v0.0.48</div>
     <div id="resinfo"></div>
 
     <script>
@@ -627,6 +630,9 @@
         // 1002 → CAF 905) and the load timeout in the watchdog below (a silent stall that never fires
         // ERROR). Cleared on a fresh LOAD and once playback actually advances.
         let awaitingPlayback = false, loadStartedAt = 0;
+        // Poster-reveal state, reset per LOAD: whether this load is expected to start playing on its
+        // own (autoplay) and whether it has actually rendered advancing frames yet.
+        let loadWasAutoplay = true, hasPlayedThisLoad = false;
         const LOAD_TIMEOUT_MS = 15000;
         function showError(title, sub, code) {
             awaitingPlayback = false;
@@ -692,14 +698,20 @@
             if (videoEl.paused || videoEl.ended || videoEl.readyState < 1) {
                 // Paused handoff: a deliberately paused video that HAS decodable frames should show its
                 // real parked frame, not the poster (currentTime never advances while paused, so the
-                // advance-based reveal below can't fire).
-                if (videoEl.readyState >= 2) posterEl.classList.remove('show');
+                // advance-based reveal below can't fire). Gated on "not an in-flight autoplay load":
+                // during a normal autoplay LOAD the element is still `paused` while readyState can
+                // already be ≥ 2, and revealing there stripped the poster before the first frame
+                // painted (the v0.0.44 black-frame regression, part 2).
+                if (videoEl.readyState >= 2 && (hasPlayedThisLoad || !loadWasAutoplay)) {
+                    posterEl.classList.remove('show');
+                }
                 setBuffering(false); return;
             }
             const now = Date.now();
             if (videoEl.currentTime > lastPos + 0.05) {
                 lastPos = videoEl.currentTime;
                 lastAdvanceAt = now;
+                hasPlayedThisLoad = true;
                 setBuffering(false);            // time is moving → really playing
                 posterEl.classList.remove('show');   // frames are rendering — reveal the video
                 if (awaitingPlayback) { awaitingPlayback = false; hideError(); }
@@ -939,6 +951,8 @@
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
             // Cover the (black) video box with the poster until this load actually renders frames.
             posterEl.classList.add('show');
+            loadWasAutoplay = (req && req.autoplay) !== false;   // undefined → CAF defaults to autoplay
+            hasPlayedThisLoad = false;
             let url = '(none)';
             try { url = (req && req.media && (req.media.contentUrl || req.media.contentId)) || '(none)'; } catch (e) {}
             lastLoadedUrl = url;   // captured on LOAD (fires even if playback later fails) → shown in the error context
