@@ -138,9 +138,21 @@
             background-color: #121212;
             background-image: var(--ambient-grad);
             background-size: cover; background-position: center;
-            opacity: 0; transition: opacity 420ms ease;
+            /* TV pacing: the whole poster fades in/out slowly instead of popping (owner, v0.0.56). */
+            opacity: 0; transition: opacity 600ms ease;
         }
         #videoPoster.show { opacity: 1; }
+        /* The cover image lives on a pseudo-layer OVER the gradient and cross-fades in when it
+           finishes downloading — a JS change to background-image itself cannot animate, which made
+           the cover pop in instantly (v0.0.56). JS feeds the url via the --poster-img custom
+           property + the has-img class. */
+        #videoPoster::after {
+            content: ""; position: absolute; inset: 0; border-radius: inherit;
+            background-image: var(--poster-img, none);
+            background-size: cover; background-position: center;
+            opacity: 0; transition: opacity 600ms ease;
+        }
+        #videoPoster.has-img::after { opacity: 1; }
 
         /* Side panels */
         .panel { grid-row: 1; align-self: center; min-width: 0; }
@@ -240,7 +252,7 @@
                not to feel pinned to the top. The big phone glyph hangs right below the title and MAY
                be partially covered by the system overlay — accepted; only the text must stay visible. */
             position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-            gap: 6vh; text-align: center;   /* the flex gap IS the text→glyph inset; must equal the glyph's bottom inset */
+            gap: 3vh; text-align: center;
             /* Layered scrim (a flat 60% dim washed out over bright/white workout frames): a radial
                pool of near-black centered on the content (title + glyph) guarantees text contrast
                over ANY frame (~95% opaque behind the message), easing to ~60% at the edges so the
@@ -263,20 +275,15 @@
             font-size: clamp(24px, 4vw, 44px); font-weight: 700; letter-spacing: -0.02em;
             text-shadow: 0 2px 18px rgba(0, 0, 0, 0.6);
         }
-        /* Phone glyph fills the space left below the title band down to the screen bottom, with
-           EQUAL insets on both sides of it (owner spec): the title band ends at 42.4vh (34vh margin
-           + 8.4vh band), the two insets are 6vh each (the flex gap above + the free space below) →
-           glyph height = 100 − 42.4 − 2×6 = 45.6vh. Height-driven + aspect-ratio + border-box (the
-           10px borders must count INTO the height, not inflate it), so it always fits the screen
-           whole; the 6vh bottom inset also gives headroom for TV overscan (panels crop up to ~5% of
-           the edges — the Cast design checklist's 5% safe area). It may still sit under the system
-           pause overlay when that slides up — fine, it's decoration, not information. */
+        /* Modest phone glyph under the title (owner settled on this after trying 3x and
+           fill-the-bottom variants, v0.0.56): the v0.0.50 size — visible from the couch but clearly
+           subordinate to the text, and it never risks the screen edge or the system overlay. */
         #gate .gate-glyph {
-            height: 45.6vh; width: auto; aspect-ratio: 34 / 52; box-sizing: border-box;
-            border: 10px solid var(--text); border-radius: 40px; position: relative; flex: none;
-            filter: drop-shadow(0 8px 34px rgba(0,0,0,0.55));
+            width: clamp(76px, 7vw, 128px); aspect-ratio: 34 / 52;
+            border: 4px solid var(--text); border-radius: 16px; position: relative; flex: none;
+            filter: drop-shadow(0 4px 18px rgba(0,0,0,0.55));
         }
-        #gate .gate-glyph::after { content: ""; position: absolute; left: 50%; bottom: 7%; width: 34%; height: 10px; transform: translateX(-50%); background: var(--text); border-radius: 5px; }
+        #gate .gate-glyph::after { content: ""; position: absolute; left: 50%; bottom: 8%; width: 34%; height: 4px; transform: translateX(-50%); background: var(--text); border-radius: 2px; }
 
         /* Splash / idle — the boot screen: the release "MAD" launcher mark on the SAME cover-not-loaded
            gradient the workout screen uses. On the first overlay message it crossfades out (opacity + slight
@@ -410,7 +417,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.55</div>
+    <div id="version">v0.0.56</div>
     <div id="resinfo"></div>
 
     <script>
@@ -774,7 +781,10 @@
             pre.onload = () => {
                 coverEl.style.backgroundImage = "url('" + safe + "')";
                 coverEl.style.opacity = '1';
-                posterEl.style.backgroundImage = "url('" + safe + "')";   // un-blurred copy in the video box
+                // Un-blurred copy in the video box: fed through a CSS var so the ::after layer can
+                // CROSS-FADE it in over the gradient (a direct background-image swap can't animate).
+                posterEl.style.setProperty('--poster-img', "url('" + safe + "')");
+                posterEl.classList.add('has-img');
             };
             pre.src = url;
         }
