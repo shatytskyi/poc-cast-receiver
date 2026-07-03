@@ -447,7 +447,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.59</div>
+    <div id="version">v0.0.60</div>
     <div id="resinfo"></div>
 
     <script>
@@ -882,7 +882,25 @@
 
         // Apply the phone's audio rendition + cover once Shaka has the manifest, and reset the
         // completion state for the freshly-loaded media.
-        let hasLoaded = false;   // (kept for the future Back/Home auto-stop guard)
+        let hasLoaded = false;   // guards the Back/Home auto-stop below against boot-time visibility flaps
+
+        // Back/Home auto-stop (RESTORED in v0.0.60 — was disabled during the CORS diagnostics, §9).
+        // Pressing Back/Home on Google TV only BACKGROUNDS the receiver page: no sender callback
+        // fires, the phone stays stuck "casting" a workout that is no longer on screen, and the
+        // channel keeps flowing (so the phone-link watchdog never trips either). When the page goes
+        // hidden after a workout has loaded, stop the receiver app — the sender's
+        // onApplicationDisconnected → endSession → onSessionEnded resume path takes over on the
+        // phone. Known accepted side effect: a TV screensaver/ambient mode kicking in (only possible
+        // while PAUSED — playing video blocks it) also hides the page and ends the cast.
+        const stopIfHidden = () => {
+            if (!hasLoaded) return;
+            logError('receiver page hidden — stopping the cast session');
+            try { context.stop(); } catch (e) {}
+        };
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') stopIfHidden();
+        });
+        window.addEventListener('pagehide', stopIfHidden);
         playerManager.addEventListener(cast.framework.events.EventType.PLAYER_LOAD_COMPLETE, () => {
             hasLoaded = true;
             videoEnded = false; updateCard();
