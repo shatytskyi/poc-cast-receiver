@@ -20,6 +20,12 @@
   Channel (phone → TV only): urn:x-cast:com.amomedia.musclemate.reboot.
        CastOverlayMessage (overlay state) + {type:"audioTrack",audio} (Shaka rendition).
        (A TV → phone remote-routing path was investigated and abandoned — see the M4 note near context.start.)
+  Seek policy (MA-4513 "2c+4"): phone SEEKs carry customData {src:"phone"} and pass through untouched;
+       any UNTAGGED SEEK (TV system-overlay scrubber / D-pad / voice) is quantized to the workout's
+       chapter marks (item start times from load customData.checkpoints) — and is a no-op while the
+       phone shows an actionable dialog (actionRequired). The SEEK bit is also dropped from
+       supportedMediaCommands so sender UIs grey/hide the scrubber (best-effort; enforceSupportedCommands
+       stays OFF — hard rejection would kill the SEEK before this interceptor could quantize it).
   Deploy: GitHub Pages → registered Custom Receiver 95AE9DBA; end+restart the cast session to refresh.
 -->
 <html>
@@ -439,7 +445,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.57</div>
+    <div id="version">v0.0.58</div>
     <div id="resinfo"></div>
 
     <script>
@@ -461,6 +467,14 @@
         const cardEl = el('card'), cardLabel = el('cardLabel'), cardTitle = el('cardTitle'), cardHint = el('cardHint'), cardHintText = el('cardHintText');
         const gateEl = el('gate');
         const errorEl = el('error'), errTitle = el('errTitle'), errSub = el('errSub'), errCode = el('errCode');
+
+        // ── MA-4513 seek policy state (header comment "Seek policy") ─────────────────────────────
+        // True while the phone shows an actionable dialog (overlay actionRequired) — untagged seeks
+        // go inert then, so a TV-remote rewind can't corrupt the dialog's exercise (plan §6).
+        let phoneActionRequired = false;
+        // Workout chapter marks in SECONDS (load customData.checkpoints arrives in ms) — the only
+        // positions an untagged (TV-originated) seek may land on. Empty = no quantization (fail-open).
+        let seekCheckpointsSec = [];
 
         ring.style.strokeDasharray = RING_C.toFixed(1);
 
@@ -649,7 +663,10 @@
             renderPanels(d);
             // Universal action gate: the phone says "the user must act here" — show the one-size-fits-all
             // card. Driven purely by the flag; the completion card (z7) covers it when both are up.
-            gateEl.classList.toggle('show', d.actionRequired === true);
+            // Also remembered for the SEEK interceptor: while a dialog is open on the phone, a TV-remote
+            // seek would corrupt the dialog's state (plan §6 "rewind during feedback"), so it goes inert.
+            phoneActionRequired = d.actionRequired === true;
+            gateEl.classList.toggle('show', phoneActionRequired);
             updateCard();
         }
 
@@ -845,6 +862,7 @@
             hasLoaded = true;
             videoEnded = false; updateCard();
             awaitingPlayback = false; hideError();   // load succeeded — clear the pending-playback watchdog + any error
+            dropSeekCommandBit();   // re-assert per load — CAF re-derives the media session's supported commands
             const info = playerManager.getMediaInformation && playerManager.getMediaInformation();
             const customData = (info && info.customData) || {};
             applyAudioLabel(desiredAudioLabel || customData.audio);
@@ -1026,7 +1044,8 @@
         });
 
         // TEMP (MA-4513 error-905 probe): observe the transport commands the SENDER issues. An interceptor
-        // MUST return the (unchanged) request or the command is dropped — these only log + pass through.
+        // MUST return a request or the command is dropped. LOAD/STOP/PAUSE only log + pass through;
+        // SEEK additionally applies the seek policy (quantize/block untagged TV seeks — see below).
         const MsgType = cast.framework.messages.MessageType;
         let loadCount = 0;
         playerManager.setMessageInterceptor(MsgType.LOAD, (req) => {
@@ -1063,6 +1082,17 @@
                     if (cd.cover) applyCover(cd.cover);
                     if (cd.audio) desiredAudioLabel = cd.audio;
                 }
+                // Chapter marks for the seek policy — reset per LOAD so a stale workout's marks can
+                // never quantize the next one (internal decode-fallback reloads re-send the same
+                // captured request, so they re-populate identically).
+                seekCheckpointsSec = [];
+                if (cd && Array.isArray(cd.checkpoints)) {
+                    seekCheckpointsSec = cd.checkpoints
+                        .map(Number).filter(v => isFinite(v) && v >= 0)
+                        .map(ms => ms / 1000)
+                        .sort((a, b) => a - b);
+                    diag('seek checkpoints: ' + seekCheckpointsSec.map(s => Math.round(s)).join('s, ') + 's');
+                }
             } catch (e) {}
             return req;
         });
@@ -1073,11 +1103,54 @@
             if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
             return req;
         });
+        // MA-4513 seek policy ("2c+4", header comment): phone seeks carry customData {src:"phone"} and
+        // pass through untouched; anything untagged came from the TV side (system-overlay scrubber /
+        // D-pad / voice — §7: those all arrive as plain media-channel SEEKs) and is quantized to the
+        // workout's chapter marks, or made inert while the phone shows an actionable dialog.
         playerManager.setMessageInterceptor(MsgType.SEEK, (req) => {
-            const at = (req && req.currentTime != null) ? Math.round(req.currentTime) : '?';
-            diag('>> SEEK ' + at + 's'); return req;
+            try {
+                const cur = playerManager.getCurrentTimeSec() || 0;
+                const isPhone = !!(req && req.customData && req.customData.src === 'phone');
+                // Requested target: absolute currentTime wins; else relative to the live position.
+                const target = (req && req.currentTime != null) ? req.currentTime
+                    : (req && req.relativeTime != null) ? cur + req.relativeTime
+                    : cur;
+                if (isPhone) { diag('>> SEEK ' + Math.round(target) + 's (phone)'); return req; }
+                if (phoneActionRequired) {
+                    // A dialog is open on the phone: a TV rewind here corrupts its exercise
+                    // attribution (plan §6) — rewrite to a no-op seek at the current position.
+                    req.currentTime = cur; req.relativeTime = undefined;
+                    diag('>> SEEK ' + Math.round(target) + 's (tv) BLOCKED — dialog open');
+                    return req;
+                }
+                if (seekCheckpointsSec.length) {
+                    // Quantize: land on the start of the chapter CONTAINING the target (floor; the
+                    // first chapter for anything before it) — "scrubbing = exercise navigation".
+                    let snapped = seekCheckpointsSec[0];
+                    for (let i = 0; i < seekCheckpointsSec.length; i++) {
+                        if (seekCheckpointsSec[i] <= target) snapped = seekCheckpointsSec[i]; else break;
+                    }
+                    req.currentTime = snapped; req.relativeTime = undefined;
+                    diag('>> SEEK ' + Math.round(target) + 's (tv) → chapter @' + Math.round(snapped) + 's');
+                    return req;
+                }
+                diag('>> SEEK ' + Math.round(target) + 's (tv, no checkpoints — pass)');
+            } catch (e) { logError('seek policy failed: ' + e); }
+            return req;
         });
         playerManager.setMessageInterceptor(MsgType.PAUSE, (req) => { diag('>> PAUSE'); return req; });
+
+        // The option-4 half of the seek policy: drop SEEK from supportedMediaCommands so sender UIs
+        // (incl. the Android TV system overlay) grey/hide their scrubber. Best-effort per §7 — the bit
+        // is a sender-UI affordance, not a block; whatever still arrives is handled by the interceptor
+        // above. enforceSupportedCommands stays OFF on purpose: hard rejection would kill a SEEK before
+        // the interceptor could quantize it, and would break the phone's tagged seeks too. Called after
+        // context.start() (calling before can throw and wedge the receiver — §8 lesson) and re-asserted
+        // on every PLAYER_LOAD_COMPLETE (CAF re-derives the media session's commands per load).
+        function dropSeekCommandBit() {
+            try { playerManager.removeSupportedMediaCommands(cast.framework.messages.Command.SEEK, true); }
+            catch (e) { logError('drop SEEK bit failed: ' + e); }
+        }
 
         // NOTE (MA-4513 M4, abandoned): TV-remote next/prev via the D-pad is NOT possible on a Web
         // Receiver — Android TV translates remote input into media-playback messages, not raw D-pad key
@@ -1217,6 +1290,7 @@
         // Harna serve TS); handled by the device-tiered maxHeight cap above (§6/§6.6).
         options.useShakaForHls = true;
         context.start(options);
+        dropSeekCommandBit();   // seek policy: grey the TV scrubber (best-effort) — see the SEEK interceptor
     </script>
 </body>
 </html>
