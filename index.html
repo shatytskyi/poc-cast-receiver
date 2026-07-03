@@ -18,10 +18,10 @@
        intentionally NOT mirrored — still plays on the phone.)
 
   Channel (phone → TV only): urn:x-cast:com.amomedia.musclemate.reboot.
-       CastOverlayMessage (overlay state) + {type:"audioTrack",audio} (Shaka rendition) +
-       {type:"ping"} (5 s phone-link heartbeat from CastPlaybackService → arms the watchdog that
-       stops the receiver when the phone-side brain dies without a clean teardown).
-       (A TV → phone remote-routing path was investigated and abandoned — see the M4 note near context.start.)
+       CastOverlayMessage (overlay state) + {type:"audioTrack",audio} (Shaka rendition).
+       ({type:"ping"} from older app builds' heartbeat is swallowed and ignored — the phone-death
+       watchdog now keys on the system SENDER_DISCONNECTED event instead, see "watchdog v2" below.
+       A TV → phone remote-routing path was investigated and abandoned — see the M4 note near context.start.)
   Seek policy (MA-4513 "2c+4"): phone SEEKs carry customData {src:"phone"} and pass through untouched;
        any UNTAGGED SEEK (TV system-overlay scrubber / D-pad / voice) is quantized to the workout's
        chapter marks (item start times from load customData.checkpoints) — and is a no-op while the
@@ -447,7 +447,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.60</div>
+    <div id="version">v0.0.61</div>
     <div id="resinfo"></div>
 
     <script>
@@ -699,32 +699,40 @@
             if (typeof data === 'string') {
                 try { data = JSON.parse(data); } catch (e) { castDebugLogger.warn('Reboot', 'bad msg: ' + event.data); return; }
             }
-            lastPhoneMsgAt = Date.now();
-            if (data && data.type === 'ping') { phoneWatchdogArmed = true; return; }
+            // Legacy heartbeat from app builds that still run the v0.0.59 ping scheme — swallow it
+            // (it must never reach applyOverlay). The watchdog below no longer consumes pings.
+            if (data && data.type === 'ping') return;
             if (data && data.type === 'audioTrack') { applyAudioLabel(data.audio); return; }
             applyOverlay(data);
         });
 
-        // Phone-link watchdog (v0.0.59, owner requirement "a killed app must stop the cast"): the
-        // sender's CastPlaybackService pings {"type":"ping"} every 5 s for exactly as long as the
-        // phone-side brain is alive. Armed by the FIRST ping only (old app builds never ping → never
-        // armed → no false stops, e.g. while paused with the deduped overlay stream silent). Any
-        // channel message counts as life. If everything goes silent for >20 s the phone process is
-        // gone without a clean teardown (crash / force-stop / OOM — a swiped task is already handled
-        // by the service's onTaskRemoved → endCurrentSession) — a workout must not keep playing
-        // headless on the TV, so the receiver stops itself (context.stop() shuts the app down; the
-        // graceful paths — phone endSession / idle — never reach this timeout).
-        let phoneWatchdogArmed = false;
-        let lastPhoneMsgAt = 0;
-        const PHONE_LINK_TIMEOUT_MS = 20000;
-        setInterval(() => {
-            if (!phoneWatchdogArmed) return;
-            if (Date.now() - lastPhoneMsgAt > PHONE_LINK_TIMEOUT_MS) {
-                phoneWatchdogArmed = false;
-                logError('phone link lost >' + (PHONE_LINK_TIMEOUT_MS / 1000) + 's — stopping the receiver');
-                try { context.stop(); } catch (e) {}
-            }
-        }, 5000);
+        // Phone-link watchdog v2 (v0.0.61 — replaces the v0.0.59 message-heartbeat scheme; owner
+        // requirement "a killed app must stop the cast"): the TRANSPORT's own death signal is used
+        // instead of a side-channel pulse. When the sender app process dies in ANY way (crash /
+        // force-stop / OOM / task removal without a clean teardown), Play services closes the
+        // virtual sender connection and CAF raises SENDER_DISCONNECTED here. CAF deliberately keeps
+        // playing after sender loss (Cast UX default), so: when the LAST sender drops, arm a grace
+        // timer — a WiFi blip / ReconnectionService re-join fires SENDER_CONNECTED and cancels it —
+        // and stop the receiver if nobody returns. Graceful paths (phone endSession, Back/Home
+        // auto-stop) shut the app down before/independently of this timer.
+        let senderLossTimer = null;
+        const SENDER_LOSS_GRACE_MS = 20000;
+        const sendersCount = () => { try { return context.getSenders().length; } catch (e) { return -1; } };
+        context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (e) => {
+            diag('SENDER_CONNECTED ' + ((e && e.senderId) || '') + ' (n=' + sendersCount() + ')');
+            if (senderLossTimer) { clearTimeout(senderLossTimer); senderLossTimer = null; }
+        });
+        context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (e) => {
+            const n = sendersCount();
+            diag('SENDER_DISCONNECTED reason=' + ((e && e.reason) || '?') + ' (n=' + n + ')');
+            if (n > 0) return;   // another sender is still attached — not our case today, but correct
+            if (senderLossTimer) clearTimeout(senderLossTimer);
+            senderLossTimer = setTimeout(() => {
+                senderLossTimer = null;
+                logError('all senders gone >' + (SENDER_LOSS_GRACE_MS / 1000) + 's — stopping the receiver');
+                try { context.stop(); } catch (err) {}
+            }, SENDER_LOSS_GRACE_MS);
+        });
 
         // Buffering spinner. The single honest signal for "is the video actually playing" is whether
         // currentTime is advancing — both PLAYER_LOAD_COMPLETE and the HTML5 `playing` event fire when
