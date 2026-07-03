@@ -154,6 +154,13 @@
         }
         #videoPoster.has-img::after { opacity: 1; }
 
+        /* One-shot content swap (v0.0.57): the incoming panel/chip content fades in on REAL changes
+           only — phase boundaries, new exercise — never on the 1 Hz timer ticks (the JS keys guard
+           that). Opacity-only, compositor-safe; restrained on purpose: content fades IN over what was
+           an instant swap, no exit animation, no movement. */
+        .swap-in { animation: softIn 340ms ease; }
+        @keyframes softIn { from { opacity: 0; } }
+
         /* Side panels */
         .panel { grid-row: 1; align-self: center; min-width: 0; }
         .panel.left { grid-column: 1; padding-right: 3%; }
@@ -223,12 +230,16 @@
         #chip:empty { display: none; }
         #chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
 
-        /* Full-screen completion card — shown when the outro VIDEO fully ends (not on a phase flag). */
+        /* Full-screen completion card — shown when the outro VIDEO fully ends (not on a phase flag).
+           Fades instead of a display pop (TV pacing, v0.0.57); visibility keeps the hidden card out
+           of paint/hit-testing, same pattern as #gate. */
         #card {
-            position: absolute; inset: 0; z-index: 7; display: none; flex-direction: column; align-items: center; justify-content: center;
+            position: absolute; inset: 0; z-index: 7; display: flex; flex-direction: column; align-items: center; justify-content: center;
             gap: 1.6vh; background: var(--on-light-heavy); text-align: center;
+            opacity: 0; visibility: hidden; pointer-events: none;
+            transition: opacity 600ms ease, visibility 0s linear 600ms;
         }
-        #card.show { display: flex; }
+        #card.show { opacity: 1; visibility: visible; transition: opacity 600ms ease; }
         #cardLabel { font-size: clamp(13px, 1.8vw, 18px); letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
         #cardTitle { margin: 0; font-size: clamp(26px, 4.6vw, 50px); font-weight: 700; letter-spacing: -0.02em; }
         #cardHint {
@@ -307,22 +318,33 @@
         @keyframes logoIn { from { opacity: 0; transform: scale(0.84); } to { opacity: 1; transform: scale(1); } }
         @media (prefers-reduced-motion: reduce) {
             .logo-mad { animation: none; }
+            .swap-in { animation: none; }
         }
-        /* Load / playback error feedback (MA-4513) — replaces the silent splash-hang with a visible message. */
-        #error { position: fixed; inset: 0; z-index: 7; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 1.6vh; padding: 6vw; text-align: center; background: rgba(8,9,12,0.92); }
-        #error.show { display: flex; }
+        /* Load / playback error feedback (MA-4513) — replaces the silent splash-hang with a visible message.
+           Fades in quickly (errors must feel prompt) but never pops (v0.0.57). */
+        #error {
+            position: fixed; inset: 0; z-index: 7; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 1.6vh; padding: 6vw; text-align: center; background: rgba(8,9,12,0.92);
+            opacity: 0; visibility: hidden; pointer-events: none;
+            transition: opacity 320ms ease, visibility 0s linear 320ms;
+        }
+        #error.show { opacity: 1; visibility: visible; transition: opacity 320ms ease; }
         #error .err-title { font-size: clamp(20px, 3.4vw, 40px); font-weight: 700; color: var(--text); }
         #error .err-sub { font-size: clamp(13px, 1.8vw, 20px); color: var(--text-secondary); max-width: 70vw; line-height: 1.4; }
         #error .err-code { font: 12px/1.4 monospace; color: var(--faint); max-width: 80vw; word-break: break-word; }
 
-        /* Buffering spinner — shown while the video (re)buffers so the TV isn't a frozen/black frame. */
+        /* Buffering spinner — shown while the video (re)buffers so the TV isn't a frozen/black frame.
+           Short fade (the 350 ms hide-debounce already stops strobing; this removes the visual pop,
+           v0.0.57). The fade is deliberately quick so buffering feedback still feels immediate. */
         #spinner {
             position: fixed; left: 50%; top: 50%; width: 64px; height: 64px;
             margin: -32px 0 0 -32px; box-sizing: border-box;
             border: 4px solid var(--on-dark-soft); border-top-color: var(--text);
-            border-radius: 50%; display: none; z-index: 6;
+            border-radius: 50%; z-index: 6;
+            opacity: 0; visibility: hidden;
+            transition: opacity 200ms ease, visibility 0s linear 200ms;
         }
-        #spinner.show { display: block; }
+        #spinner.show { opacity: 1; visibility: visible; transition: opacity 200ms ease; }
         @media (prefers-reduced-motion: no-preference) {
             #spinner.show { animation: spin 0.85s linear infinite; }
         }
@@ -417,7 +439,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.56</div>
+    <div id="version">v0.0.57</div>
     <div id="resinfo"></div>
 
     <script>
@@ -516,6 +538,17 @@
             ring.style.strokeDashoffset = (RING_C * (1 - frac)).toFixed(1);
         }
 
+        // One-shot fade-in for swapped content: remove + forced reflow + re-add restarts the CSS
+        // animation. Called ONLY when the content key actually changed — the overlay stream arrives
+        // ~1 Hz (timer ticks) and animating every message would flash constantly.
+        const leftPanelEl = document.querySelector('.panel.left');
+        function softSwap(elem) {
+            elem.classList.remove('swap-in');
+            void elem.offsetWidth;
+            elem.classList.add('swap-in');
+        }
+        let lastLeftKey = null, lastRightKey = null;
+
         function renderPanels(d) {
             let eyebrow = '', title = '', sub = '';
             let rightMode = 'hidden', rightLabel = '', promptBtn = '';
@@ -545,6 +578,18 @@
             leftEyebrow.textContent = eyebrow;
             leftTitle.textContent = title;
             leftSub.textContent = sub;
+            // Fade the incoming content only when it REALLY changed (phase boundary / next exercise),
+            // not on every 1 Hz timer update. The right key deliberately excludes the timer digits.
+            const leftKey = eyebrow + '|' + title + '|' + sub;
+            if (leftKey !== lastLeftKey) {
+                if (lastLeftKey !== null) softSwap(leftPanelEl);   // no swap on the very first paint
+                lastLeftKey = leftKey;
+            }
+            const rightKey = rightMode + '|' + rightLabel + '|' + promptBtn;
+            if (rightKey !== lastRightKey) {
+                if (lastRightKey !== null) softSwap(rightPanel);
+                lastRightKey = rightKey;
+            }
             applyRight(rightMode, rightLabel, d, promptBtn);
         }
 
@@ -595,7 +640,11 @@
             // drop the ended flag so the celebration card stops covering the video.
             if (d.phase !== 'outro' && d.phase !== 'completed') videoEnded = false;
             screenEl.dataset.phase = d.phase;
-            chipEl.textContent = d.workoutTitle || '';
+            const chipText = d.workoutTitle || '';
+            if (chipEl.textContent !== chipText) {
+                chipEl.textContent = chipText;
+                if (chipText) softSwap(chipEl);
+            }
             renderSegments(d.segments || []);
             renderPanels(d);
             // Universal action gate: the phone says "the user must act here" — show the one-size-fits-all
