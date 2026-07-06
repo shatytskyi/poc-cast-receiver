@@ -476,12 +476,13 @@
         <span id="linklossText">Lost connection with phone</span>
         <span class="loss-timer" id="linklossTimer">1:00</span>
     </div>
-    <!-- v0.0.68: production error reporting (plan §14.5) — every error the on-screen feed captures
-         (media/timeout/JS crash/rejection/internal) is ALSO forwarded to the phone over the Reboot
-         channel as {type:"error", category, ...}; the sender maps the category to a
-         CastReceiverException subclass and records a Crashlytics non-fatal. Deduped + capped
-         receiver-side so an error loop can never flood the channel. -->
-    <div id="version">v0.0.68</div>
+    <!-- v0.0.69: error-report categorization fixes from the first on-device v0.0.68 report (plan
+         §14.5): shaka fields read in BOTH payload shapes ({category,code,data} and
+         {shakaErrorCode,shakaErrorData} — the latter made a CORS 1002 report subtype "other");
+         category derived from the code's thousands digit when absent + CAF 3xx/4xx range belt;
+         the exact failing segment/rendition URL forwarded as failingUrl; the aggregate 905/906
+         that trails a specific media error is suppressed (one failure = one non-fatal). -->
+    <div id="version">v0.0.69</div>
     <div id="resinfo"></div>
 
     <script>
@@ -621,6 +622,10 @@
         const ERROR_REPORT_DEDUPE_MS = 30000;   // identical error suppressed within this window
         let errorReportCount = 0;
         const errorReportLastAt = {};
+        // When the last SPECIFIC media error was reported — lets the ERROR listener swallow the
+        // aggregate 905/906 that trails it (same failure, second non-fatal). Negative start so a
+        // standalone 905 in the first seconds of page life is NOT wrongly suppressed.
+        let lastSpecificMediaReportAt = -1e9;
         // Reads a possibly not-yet-initialised binding (an early JS error can fire before the lets
         // below it are alive — TDZ) without breaking the report; missing context reads as null.
         function safeRead(fn) { try { const v = fn(); return v === undefined ? null : v; } catch (e) { return null; } }
@@ -642,7 +647,8 @@
                     shakaCode: f.shakaCode != null ? f.shakaCode : null,
                     willRetry: f.willRetry === true,
                     site: f.site || null,
-                    message: String(f.message || '').slice(0, 300),
+                    failingUrl: f.failingUrl ? String(f.failingUrl).slice(0, 300) : null,
+                    message: String(f.message || '').slice(0, 500),
                     // Same context block the on-screen feed shows — every field TDZ/undefined-safe.
                     context: {
                         url: safeRead(() => lastLoadedUrl),
@@ -1146,15 +1152,32 @@
         }
         let capHeight = loadStoredCap();  // the discovered decode cap for THIS device, or null
         let masterHeights = [];           // rung heights parsed from the CURRENT master (desc) — the URL-free ladder
+        // Pulls the shaka error code + category out of a CAF ERROR event, tolerating BOTH payload
+        // shapes seen on devices: a real shaka.util.Error ({category, code, data}) and the
+        // MediaError-like shape ({shakaErrorCode, shakaErrorData}) an Android TV runtime sent for a
+        // CORS segment failure (v0.0.68 report miscategorized it as "other" — plan §14.5). When the
+        // category field is absent it is derived from the code itself: shaka encodes it in the
+        // thousands digit (1002 → 1 NETWORK, 3016 → 3 MEDIA, 4xxx MANIFEST).
+        function shakaErrorParts(event) {
+            const parts = { code: null, category: null };
+            try {
+                const e = event && event.error;
+                if (e && typeof e === 'object') {
+                    const rawCode = e.code != null ? e.code : e.shakaErrorCode;
+                    if (rawCode != null && isFinite(Number(rawCode))) parts.code = Number(rawCode);
+                    if (e.category != null && isFinite(Number(e.category))) parts.category = Number(e.category);
+                    if (parts.category === null && parts.code !== null) parts.category = Math.floor(parts.code / 1000);
+                }
+            } catch (x) {}
+            return parts;
+        }
         function isDecodeError(event) {
             // Shaka 3016 = VIDEO_ERROR / PIPELINE_ERROR_COULD_NOT_RENDER; category 3 = MEDIA. Codes may be
             // strings → coerce. CAF detailedErrorCode media range is 100–199 (e.g. MEDIA_UNKNOWN=100).
             try {
-                const e = event && event.error;
-                const code = e && e.code != null ? Number(e.code) : NaN;
-                const cat = e && e.category != null ? Number(e.category) : NaN;
+                const s = shakaErrorParts(event);
                 const det = event && event.detailedErrorCode != null ? Number(event.detailedErrorCode) : NaN;
-                return code === 3016 || cat === 3 || (det >= 100 && det <= 199);
+                return s.code === 3016 || s.category === 3 || (det >= 100 && det <= 199);
             } catch (x) { return false; }
         }
         // Re-issues the SAME master (contentUrl untouched — the manifestHandler filter applies the new
@@ -1187,17 +1210,20 @@
             // 906 = LOAD_FAILED; event.error (Shaka) carries category (1=NETWORK 4=MANIFEST …, incl. CORS
             // as 1002 HTTP_ERROR) + code + data.
             const code = event.detailedErrorCode != null ? event.detailedErrorCode : '?';
+            const shakaParts = shakaErrorParts(event);   // tolerates both error payload shapes (§14.5)
             let extra = '';
-            let shakaCat = null, shakaCode = null;   // numeric shaka enums for the §14.5 report
+            let failingUrl = null;   // the exact URL that failed (segment/rendition) when shaka carried it
             try {
                 const e = event.error;
                 if (e && typeof e === 'object') {
-                    if (e.category != null && isFinite(Number(e.category))) shakaCat = Number(e.category);
-                    if (e.code != null && isFinite(Number(e.code))) shakaCode = Number(e.code);
-                    const cat = e.category != null ? 'cat=' + e.category + ' ' : '';
-                    const ec = e.code != null ? 'shaka=' + e.code + ' ' : '';
-                    const data = e.data ? JSON.stringify(e.data).slice(0, 160) : JSON.stringify(e).slice(0, 160);
-                    extra = cat + ec + data;
+                    const data = e.data || e.shakaErrorData;
+                    if (data && data.length && typeof data[0] === 'string' && data[0].indexOf('http') === 0) {
+                        failingUrl = data[0];
+                    }
+                    const cat = shakaParts.category != null ? 'cat=' + shakaParts.category + ' ' : '';
+                    const ec = shakaParts.code != null ? 'shaka=' + shakaParts.code + ' ' : '';
+                    const dataStr = data ? JSON.stringify(data).slice(0, 160) : JSON.stringify(e).slice(0, 160);
+                    extra = cat + ec + dataStr;
                 } else if (event.reason != null) {
                     extra = 'reason=' + event.reason;
                 }
@@ -1218,17 +1244,29 @@
             // cap-discovery is about to self-heal reports willRetry=true (owner decision 2026-07-06:
             // report them all — the volume of self-healed decodes is the telemetry that justifies the
             // ≤1080 encode rung to backend, §6). Subtype is structural: decode via isDecodeError(),
-            // else the shaka category enum (1=NETWORK — the §5 CORS class, 4=MANIFEST).
+            // else the shaka category (1=NETWORK — the §5 CORS class, 4=MANIFEST; derived from the
+            // code's thousands digit when the field is absent) with the CAF detailedErrorCode ranges
+            // as the belt (3xx=network, 4xx=manifest) for errors that carry no shaka object at all.
             const willRetry = isDecodeError(event) && !!nextH && fallbackAttempts < MAX_FALLBACK_ATTEMPTS;
-            reportError('media', {
-                subtype: isDecodeError(event) ? 'decode'
-                    : (shakaCat === 1 ? 'network' : (shakaCat === 4 ? 'manifest' : 'other')),
-                cafCode: isFinite(Number(code)) ? Number(code) : null,
-                shakaCategory: shakaCat,
-                shakaCode: shakaCode,
-                willRetry: willRetry,
-                message: 'code=' + code + (extra ? '  ' + extra : ''),
-            });
+            const cafNum = isFinite(Number(code)) ? Number(code) : null;
+            // 905/906 (LOAD_INTERRUPTED / LOAD_FAILED) are aggregate downstream symptoms (§5): right
+            // after a specific media error they would duplicate the SAME failure in Crashlytics —
+            // suppress the pair then. A standalone 905/906 (nothing specific preceded it) still reports.
+            const isAggregateLoadError = cafNum === 905 || cafNum === 906;
+            if (!(isAggregateLoadError && (nowMs() - lastSpecificMediaReportAt) < 15000)) {
+                if (!isAggregateLoadError) lastSpecificMediaReportAt = nowMs();
+                reportError('media', {
+                    subtype: isDecodeError(event) ? 'decode'
+                        : (shakaParts.category === 1 || (cafNum != null && cafNum >= 300 && cafNum < 400) ? 'network'
+                        : (shakaParts.category === 4 || (cafNum != null && cafNum >= 400 && cafNum < 500) ? 'manifest' : 'other')),
+                    cafCode: cafNum,
+                    shakaCategory: shakaParts.category,
+                    shakaCode: shakaParts.code,
+                    willRetry: willRetry,
+                    failingUrl: failingUrl,
+                    message: 'code=' + code + (extra ? '  ' + extra : '') + (failingUrl ? '  failing=' + failingUrl : ''),
+                });
+            }
             if (willRetry) {
                 fallbackAttempts++;
                 capHeight = nextH;
