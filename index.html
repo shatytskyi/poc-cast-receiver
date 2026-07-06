@@ -476,7 +476,7 @@
         <span>Lost connection with phone</span>
         <span class="loss-timer" id="linklossTimer">1:00</span>
     </div>
-    <div id="version">v0.0.63</div>
+    <div id="version">v0.0.64</div>
     <div id="resinfo"></div>
 
     <script>
@@ -735,23 +735,24 @@
             applyOverlay(data);
         });
 
-        // Phone-link watchdog v2 (v0.0.61, UX pass v0.0.63 — replaces the v0.0.59 message-heartbeat
-        // scheme; owner requirement "a killed app must stop the cast"): the TRANSPORT's own death
-        // signal is used instead of a side-channel pulse. When the sender app process dies in ANY
-        // way (crash / force-stop / OOM) or VANISHES from the network (WiFi off — detected by the
-        // platform heartbeat, maxInactivity below), CAF raises SENDER_DISCONNECTED here. CAF
-        // deliberately keeps playing after sender loss (Cast UX default) — but an orphan must never
-        // keep playing against frozen overlay timers (owner UX call, 2026-07-06), so when the LAST
-        // sender drops we PAUSE playback and show the Reboot-style "Lost connection with phone"
-        // banner with a 60 s countdown; a reconnect (SENDER_CONNECTED — ReconnectionService after a
-        // WiFi blip) cancels it and the sender's reload takes over, otherwise the receiver stops
-        // itself. Graceful paths (phone endSession, Back/Home auto-stop) shut the app down
-        // before/independently of this countdown.
+        // Phone-link watchdog v2 (v0.0.61, UX pass v0.0.63/64 — replaces the v0.0.59
+        // message-heartbeat scheme; owner requirement "a killed app must stop the cast"): the
+        // TRANSPORT's own death signal is used instead of a side-channel pulse. When the sender app
+        // process dies in ANY way (crash / force-stop / OOM) or VANISHES from the network (WiFi off
+        // — detected by the platform heartbeat, maxInactivity below), CAF raises SENDER_DISCONNECTED
+        // here. CAF deliberately keeps playing after sender loss (Cast UX default) — but an orphan
+        // must never keep playing against frozen overlay timers (owner UX call, 2026-07-06), so when
+        // the LAST sender drops we PAUSE playback (and keep it inert — PLAY/SEEK are blocked in the
+        // interceptors while the countdown runs) and show the Reboot-style "Lost connection with
+        // phone" banner with a short countdown, then the receiver stops itself. The phone ends its
+        // session immediately on the same link loss and parks PAUSED locally (owner simplification,
+        // 2026-07-06: no auto-reconnect — re-casting by hand picks the position back up), so a
+        // SENDER_CONNECTED cancel is only ever a manual re-cast racing the countdown.
         const linkLossEl = el('linkloss');
         const linkLossTimerEl = el('linklossTimer');
         let linkLossInterval = null;
         let linkLossDeadline = 0;
-        const LINK_LOSS_COUNTDOWN_MS = 60000;
+        const LINK_LOSS_COUNTDOWN_MS = 10000;
         const sendersCount = () => { try { return context.getSenders().length; } catch (e) { return -1; } };
         function formatLossSeconds(totalSeconds) {
             const m = Math.floor(totalSeconds / 60), s = totalSeconds % 60;
@@ -766,6 +767,10 @@
             linkLossInterval = setInterval(() => {
                 const left = Math.max(0, Math.ceil((linkLossDeadline - Date.now()) / 1000));
                 linkLossTimerEl.textContent = formatLossSeconds(left);
+                // Belt: anything that slipped past the PLAY/SEEK blocks gets re-paused every tick.
+                try {
+                    if (playerManager.getPlayerState() === cast.framework.messages.PlayerState.PLAYING) playerManager.pause();
+                } catch (e) {}
                 if (left <= 0) {
                     cancelLinkLossCountdown();
                     logError('phone link lost for ' + (LINK_LOSS_COUNTDOWN_MS / 1000) + 's — stopping the receiver');
@@ -1223,6 +1228,12 @@
                     : (req && req.relativeTime != null) ? cur + req.relativeTime
                     : cur;
                 if (isPhone) { diag('>> SEEK ' + Math.round(target) + 's (phone)'); return req; }
+                if (linkLossInterval) {
+                    // Phone link lost: the workout is parked until the countdown ends — no seeking.
+                    req.currentTime = cur; req.relativeTime = undefined;
+                    diag('>> SEEK ' + Math.round(target) + 's (tv) BLOCKED — phone link lost');
+                    return req;
+                }
                 if (phoneActionRequired) {
                     // A dialog is open on the phone: a TV rewind here corrupts its exercise
                     // attribution (plan §6) — rewrite to a no-op seek at the current position.
@@ -1246,6 +1257,14 @@
             return req;
         });
         playerManager.setMessageInterceptor(MsgType.PAUSE, (req) => { diag('>> PAUSE'); return req; });
+        // While the link-loss countdown runs the TV must stay paused (owner spec, 2026-07-06): the
+        // phone is gone, so any PLAY here is the TV remote / voice — swallow it. Returning null
+        // cancels the command.
+        playerManager.setMessageInterceptor(MsgType.PLAY, (req) => {
+            if (linkLossInterval) { diag('>> PLAY blocked — phone link lost'); return null; }
+            diag('>> PLAY');
+            return req;
+        });
 
         // The option-4 half of the seek policy: drop SEEK from supportedMediaCommands so sender UIs
         // (incl. the Android TV system overlay) grey/hide their scrubber. Best-effort per §7 — the bit
