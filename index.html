@@ -447,7 +447,7 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.61</div>
+    <div id="version">v0.0.62</div>
     <div id="resinfo"></div>
 
     <script>
@@ -1340,6 +1340,15 @@
         // max-HEIGHT limit on portrait, not a container issue (the fMP4 theory was disproven — both we and
         // Harna serve TS); handled by the device-tiered maxHeight cap above (§6/§6.6).
         options.useShakaForHls = true;
+        // Watchdog v2 companion (v0.0.62): platform-level sender heartbeat. Without it a sender that
+        // VANISHES from the network (phone WiFi off — nobody sends a TCP close) is never detected:
+        // the kill-test matrix showed force-stop → SENDER_DISCONNECTED in seconds (gms actively
+        // closes), but WiFi-off left an ORPHANED session playing forever. maxInactivity makes the
+        // platform ping each sender connection and close unresponsive ones after this many seconds,
+        // which then raises SENDER_DISCONNECTED → the sender-loss grace timer above takes over.
+        // Total orphan teardown ≈ 15 s (platform) + 20 s (grace). Blips shorter than 15 s survive
+        // untouched; longer ones get the reconnect window of the grace timer.
+        options.maxInactivity = 15;
         context.start(options);
         dropSeekCommandBit();   // seek policy: grey the TV scrubber (best-effort) — see the SEEK interceptor
     </script>
