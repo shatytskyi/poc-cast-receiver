@@ -476,11 +476,12 @@
         <span id="linklossText">Lost connection with phone</span>
         <span class="loss-timer" id="linklossTimer">1:00</span>
     </div>
-    <!-- v0.0.67: localization mechanism (plan §14.2) — all user-facing texts moved into the STR
-         dictionary; the phone sends localized values in LOAD customData.strings (cast_receiver_*
-         keys from the app's Lokalise-managed strings.xml); the English literals are the fallback
-         for older sender builds. -->
-    <div id="version">v0.0.67</div>
+    <!-- v0.0.68: production error reporting (plan §14.5) — every error the on-screen feed captures
+         (media/timeout/JS crash/rejection/internal) is ALSO forwarded to the phone over the Reboot
+         channel as {type:"error", category, ...}; the sender maps the category to a
+         CastReceiverException subclass and records a Crashlytics non-fatal. Deduped + capped
+         receiver-side so an error loop can never flood the channel. -->
+    <div id="version">v0.0.68</div>
     <div id="resinfo"></div>
 
     <script>
@@ -603,6 +604,58 @@
             } catch (e) {}
             errlogEl.textContent = errlogLines.join('\n') + ctx;
             errlogEl.classList.add('show');
+        }
+
+        // ── MA-4513 §14.5: production error reporting — receiver errors → phone → Crashlytics ────
+        // Every captured error is ALSO forwarded to the sender over the Reboot channel as
+        // {type:"error", category, ...}. The phone maps the category to a CastReceiverException
+        // subclass (CastReceiverErrorReporter.kt) and records a Crashlytics NON-FATAL, so TV-side
+        // failures are visible in release without a debugger. Categories are STRUCTURAL (which
+        // handler caught the error), never parsed from message text: media (CAF ERROR event, with
+        // subtype network/decode/manifest/other from the shaka category enums), load_timeout,
+        // js_error, promise_rejection, internal (our own catch blocks). Errors with no sender
+        // connected (orphan countdown, post-disconnect teardown) are dropped by the SDK — accepted
+        // v1 gap (plan §14.5). Dedupe + a hard lifetime cap keep an error loop from flooding the
+        // channel or Crashlytics.
+        const ERROR_REPORT_LIMIT = 20;          // max reports per receiver lifetime
+        const ERROR_REPORT_DEDUPE_MS = 30000;   // identical error suppressed within this window
+        let errorReportCount = 0;
+        const errorReportLastAt = {};
+        // Reads a possibly not-yet-initialised binding (an early JS error can fire before the lets
+        // below it are alive — TDZ) without breaking the report; missing context reads as null.
+        function safeRead(fn) { try { const v = fn(); return v === undefined ? null : v; } catch (e) { return null; } }
+        function reportError(category, fields) {
+            try {
+                if (errorReportCount >= ERROR_REPORT_LIMIT) return;
+                const f = fields || {};
+                const key = [category, f.subtype, f.cafCode, f.site, String(f.message || '').slice(0, 80)].join('|');
+                const now = Date.now();
+                if (errorReportLastAt[key] && now - errorReportLastAt[key] < ERROR_REPORT_DEDUPE_MS) return;
+                errorReportLastAt[key] = now;
+                errorReportCount++;
+                context.sendCustomMessage(NAMESPACE, undefined, {
+                    type: 'error',
+                    category: category,
+                    subtype: f.subtype || null,
+                    cafCode: f.cafCode != null ? f.cafCode : null,
+                    shakaCategory: f.shakaCategory != null ? f.shakaCategory : null,
+                    shakaCode: f.shakaCode != null ? f.shakaCode : null,
+                    willRetry: f.willRetry === true,
+                    site: f.site || null,
+                    message: String(f.message || '').slice(0, 300),
+                    // Same context block the on-screen feed shows — every field TDZ/undefined-safe.
+                    context: {
+                        url: safeRead(() => lastLoadedUrl),
+                        audio: safeRead(() => desiredAudioLabel),
+                        phase: safeRead(() => currentPhase),
+                        build: safeRead(() => el('version').textContent),
+                        ua: safeRead(() => navigator.userAgent),
+                        positionSec: safeRead(() => Math.round(videoEl.currentTime)),
+                        capHeight: safeRead(() => capHeight),
+                        fallbackAttempts: safeRead(() => fallbackAttempts),
+                    },
+                });
+            } catch (e) { /* reporting must never break the receiver — the on-screen feed has the error */ }
         }
 
         // Segments = [introProgress, ...exerciseProgresses, outroProgress]; first + last render as
@@ -938,6 +991,7 @@
             // instead of hanging on the splash forever. showError() clears the flag so it fires once.
             if (awaitingPlayback && loadStartedAt > 0 && (Date.now() - loadStartedAt) > LOAD_TIMEOUT_MS) {
                 logError('load timeout — no playback after ' + (LOAD_TIMEOUT_MS / 1000) + 's');
+                reportError('load_timeout', { message: 'no playback within ' + (LOAD_TIMEOUT_MS / 1000) + 's of LOAD' });
                 showError(str('errorCantReach'), str('errorDidntStart'), 'load timeout after ' + (LOAD_TIMEOUT_MS / 1000) + 's');
             }
 
@@ -1120,7 +1174,11 @@
                 req.autoplay = (capturedLoadRequest && capturedLoadRequest.autoplay != null) ? capturedLoadRequest.autoplay : true;
                 playerManager.load(req);
                 return true;
-            } catch (e) { logError('cap reload failed: ' + e); return false; }
+            } catch (e) {
+                logError('cap reload failed: ' + e);
+                reportError('internal', { site: 'capReload', message: String(e) });
+                return false;
+            }
         }
 
         playerManager.addEventListener(cast.framework.events.EventType.ERROR, (event) => {
@@ -1130,9 +1188,12 @@
             // as 1002 HTTP_ERROR) + code + data.
             const code = event.detailedErrorCode != null ? event.detailedErrorCode : '?';
             let extra = '';
+            let shakaCat = null, shakaCode = null;   // numeric shaka enums for the §14.5 report
             try {
                 const e = event.error;
                 if (e && typeof e === 'object') {
+                    if (e.category != null && isFinite(Number(e.category))) shakaCat = Number(e.category);
+                    if (e.code != null && isFinite(Number(e.code))) shakaCode = Number(e.code);
                     const cat = e.category != null ? 'cat=' + e.category + ' ' : '';
                     const ec = e.code != null ? 'shaka=' + e.code + ' ' : '';
                     const data = e.data ? JSON.stringify(e.data).slice(0, 160) : JSON.stringify(e).slice(0, 160);
@@ -1153,7 +1214,22 @@
             const failedH = lastActiveHeightNum || (capHeight != null ? capHeight : (masterHeights[0] || 0));
             const nextH = masterHeights.filter(h => h < failedH)[0] || null;
             logError('decode=' + isDecodeError(event) + ' ACTIVE=' + lastActiveWxH + ' failedH=' + failedH + ' next=' + (nextH || 'none') + ' fb=' + fallbackAttempts);
-            if (isDecodeError(event) && nextH && fallbackAttempts < MAX_FALLBACK_ATTEMPTS) {
+            // §14.5 report. willRetry mirrors the fallback branch below EXACTLY: a decode error the
+            // cap-discovery is about to self-heal reports willRetry=true (owner decision 2026-07-06:
+            // report them all — the volume of self-healed decodes is the telemetry that justifies the
+            // ≤1080 encode rung to backend, §6). Subtype is structural: decode via isDecodeError(),
+            // else the shaka category enum (1=NETWORK — the §5 CORS class, 4=MANIFEST).
+            const willRetry = isDecodeError(event) && !!nextH && fallbackAttempts < MAX_FALLBACK_ATTEMPTS;
+            reportError('media', {
+                subtype: isDecodeError(event) ? 'decode'
+                    : (shakaCat === 1 ? 'network' : (shakaCat === 4 ? 'manifest' : 'other')),
+                cafCode: isFinite(Number(code)) ? Number(code) : null,
+                shakaCategory: shakaCat,
+                shakaCode: shakaCode,
+                willRetry: willRetry,
+                message: 'code=' + code + (extra ? '  ' + extra : ''),
+            });
+            if (willRetry) {
                 fallbackAttempts++;
                 capHeight = nextH;
                 storeCap(nextH);   // remember across loads AND sessions — next cast skips the discovery
@@ -1199,11 +1275,13 @@
         window.addEventListener('error', (e) => {
             const where = e.filename ? ' @' + String(e.filename).split('/').pop() + ':' + e.lineno : '';
             logError('JS error  ' + (e.message || 'error') + where);
+            reportError('js_error', { message: (e.message || 'error') + where });
         });
         window.addEventListener('unhandledrejection', (e) => {
             const r = e.reason;
             const msg = (r && r.message) ? r.message : String(r);
             logError('unhandled promise  ' + msg.slice(0, 200));
+            reportError('promise_rejection', { message: msg.slice(0, 200) });
         });
 
         // TEMP (MA-4513 error-905 probe): observe the transport commands the SENDER issues. An interceptor
@@ -1309,7 +1387,10 @@
                     return req;
                 }
                 diag('>> SEEK ' + Math.round(target) + 's (tv, no checkpoints — pass)');
-            } catch (e) { logError('seek policy failed: ' + e); }
+            } catch (e) {
+                logError('seek policy failed: ' + e);
+                reportError('internal', { site: 'seekPolicy', message: String(e) });
+            }
             return req;
         });
         playerManager.setMessageInterceptor(MsgType.PAUSE, (req) => { diag('>> PAUSE'); return req; });
@@ -1331,7 +1412,10 @@
         // on every PLAYER_LOAD_COMPLETE (CAF re-derives the media session's commands per load).
         function dropSeekCommandBit() {
             try { playerManager.removeSupportedMediaCommands(cast.framework.messages.Command.SEEK, true); }
-            catch (e) { logError('drop SEEK bit failed: ' + e); }
+            catch (e) {
+                logError('drop SEEK bit failed: ' + e);
+                reportError('internal', { site: 'dropSeekBit', message: String(e) });
+            }
         }
 
         // NOTE (MA-4513 M4, abandoned): TV-remote next/prev via the D-pad is NOT possible on a Web
@@ -1418,7 +1502,11 @@
                     out.push(line);
                 }
                 return kept > 0 ? out.join('\n') : text;
-            } catch (e) { logError('master filter failed: ' + e); return text; }
+            } catch (e) {
+                logError('master filter failed: ' + e);
+                reportError('internal', { site: 'masterFilter', message: String(e) });
+                return text;
+            }
         }
 
         playerManager.setMediaPlaybackInfoHandler((loadRequestData, playbackConfig) => {
@@ -1457,10 +1545,16 @@
                         } else {
                             manifestHandlerSeen = manifestHandlerSeen || 'media✓';
                         }
-                    } catch (e) { logError('manifestHandler failed: ' + e); }
+                    } catch (e) {
+                        logError('manifestHandler failed: ' + e);
+                        reportError('internal', { site: 'manifestHandler', message: String(e) });
+                    }
                     return manifest;
                 };
-            } catch (e) { logError('MPI handler failed: ' + e); }
+            } catch (e) {
+                logError('MPI handler failed: ' + e);
+                reportError('internal', { site: 'mediaPlaybackInfoHandler', message: String(e) });
+            }
             return playbackConfig;
         });
 
