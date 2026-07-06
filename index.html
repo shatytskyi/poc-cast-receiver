@@ -341,6 +341,29 @@
         #error .err-sub { font-size: clamp(13px, 1.8vw, 20px); color: var(--text-secondary); max-width: 70vw; line-height: 1.4; }
         #error .err-code { font: 12px/1.4 monospace; color: var(--faint); max-width: 80vw; word-break: break-word; }
 
+        /* "Lost connection with phone" warning banner (v0.0.63) — skinned after the app's Reboot
+           warning snackbar (MMSnackBar: surfacePrimary #2A2A2A card, 12px radius, soft shadow,
+           iconWarning #F2DA40, white body text), scaled for TV viewing distance and pinned
+           TOP-center — the system pause overlay rises from the BOTTOM (§7), and pausing is exactly
+           what triggers this banner. Compositor-only show/hide (opacity + transform). */
+        #linkloss {
+            position: fixed; left: 50%; top: 7vh; z-index: 8;
+            display: flex; align-items: center; gap: 16px;
+            max-width: 72vw; padding: 18px 26px; box-sizing: border-box;
+            background: #2A2A2A; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+            font-size: clamp(18px, 2.2vw, 28px); color: var(--text); white-space: nowrap;
+            opacity: 0; visibility: hidden; pointer-events: none;
+            transform: translateX(-50%) translateY(-16px);
+            transition: opacity 320ms ease, transform 320ms ease, visibility 0s linear 320ms;
+        }
+        #linkloss.show {
+            opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0);
+            transition: opacity 320ms ease, transform 320ms ease;
+        }
+        #linkloss svg { width: 30px; height: 30px; flex: none; }
+        #linkloss .loss-timer { font-weight: 700; font-variant-numeric: tabular-nums; margin-left: 6px; }
+
         /* Buffering spinner — shown while the video (re)buffers so the TV isn't a frozen/black frame.
            Short fade (the 350 ms hide-debounce already stops strobing; this removes the visual pop,
            v0.0.57). The fade is deliberately quick so buffering feedback still feels immediate. */
@@ -447,7 +470,13 @@
     <div id="spinner"></div>
     <div id="diag"></div>
     <div id="errlog"></div>
-    <div id="version">v0.0.62</div>
+    <!-- Phone-link-lost warning (v0.0.63): Reboot warning-snackbar style + 60 s auto-stop countdown -->
+    <div id="linkloss">
+        <svg viewBox="0 0 24 24" fill="#F2DA40" aria-hidden="true"><path d="M12 2.6 23 21.4H1L12 2.6zm-1.1 6.9.3 6h1.6l.3-6h-2.2zm1.1 9.9a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5z"/></svg>
+        <span>Lost connection with phone</span>
+        <span class="loss-timer" id="linklossTimer">1:00</span>
+    </div>
+    <div id="version">v0.0.63</div>
     <div id="resinfo"></div>
 
     <script>
@@ -706,32 +735,57 @@
             applyOverlay(data);
         });
 
-        // Phone-link watchdog v2 (v0.0.61 — replaces the v0.0.59 message-heartbeat scheme; owner
-        // requirement "a killed app must stop the cast"): the TRANSPORT's own death signal is used
-        // instead of a side-channel pulse. When the sender app process dies in ANY way (crash /
-        // force-stop / OOM / task removal without a clean teardown), Play services closes the
-        // virtual sender connection and CAF raises SENDER_DISCONNECTED here. CAF deliberately keeps
-        // playing after sender loss (Cast UX default), so: when the LAST sender drops, arm a grace
-        // timer — a WiFi blip / ReconnectionService re-join fires SENDER_CONNECTED and cancels it —
-        // and stop the receiver if nobody returns. Graceful paths (phone endSession, Back/Home
-        // auto-stop) shut the app down before/independently of this timer.
-        let senderLossTimer = null;
-        const SENDER_LOSS_GRACE_MS = 20000;
+        // Phone-link watchdog v2 (v0.0.61, UX pass v0.0.63 — replaces the v0.0.59 message-heartbeat
+        // scheme; owner requirement "a killed app must stop the cast"): the TRANSPORT's own death
+        // signal is used instead of a side-channel pulse. When the sender app process dies in ANY
+        // way (crash / force-stop / OOM) or VANISHES from the network (WiFi off — detected by the
+        // platform heartbeat, maxInactivity below), CAF raises SENDER_DISCONNECTED here. CAF
+        // deliberately keeps playing after sender loss (Cast UX default) — but an orphan must never
+        // keep playing against frozen overlay timers (owner UX call, 2026-07-06), so when the LAST
+        // sender drops we PAUSE playback and show the Reboot-style "Lost connection with phone"
+        // banner with a 60 s countdown; a reconnect (SENDER_CONNECTED — ReconnectionService after a
+        // WiFi blip) cancels it and the sender's reload takes over, otherwise the receiver stops
+        // itself. Graceful paths (phone endSession, Back/Home auto-stop) shut the app down
+        // before/independently of this countdown.
+        const linkLossEl = el('linkloss');
+        const linkLossTimerEl = el('linklossTimer');
+        let linkLossInterval = null;
+        let linkLossDeadline = 0;
+        const LINK_LOSS_COUNTDOWN_MS = 60000;
         const sendersCount = () => { try { return context.getSenders().length; } catch (e) { return -1; } };
+        function formatLossSeconds(totalSeconds) {
+            const m = Math.floor(totalSeconds / 60), s = totalSeconds % 60;
+            return m + ':' + String(s).padStart(2, '0');
+        }
+        function startLinkLossCountdown() {
+            if (linkLossInterval) return;   // already counting down
+            try { playerManager.pause(); } catch (e) {}
+            linkLossDeadline = Date.now() + LINK_LOSS_COUNTDOWN_MS;
+            linkLossTimerEl.textContent = formatLossSeconds(LINK_LOSS_COUNTDOWN_MS / 1000);
+            linkLossEl.classList.add('show');
+            linkLossInterval = setInterval(() => {
+                const left = Math.max(0, Math.ceil((linkLossDeadline - Date.now()) / 1000));
+                linkLossTimerEl.textContent = formatLossSeconds(left);
+                if (left <= 0) {
+                    cancelLinkLossCountdown();
+                    logError('phone link lost for ' + (LINK_LOSS_COUNTDOWN_MS / 1000) + 's — stopping the receiver');
+                    try { context.stop(); } catch (e) {}
+                }
+            }, 1000);
+        }
+        function cancelLinkLossCountdown() {
+            if (linkLossInterval) { clearInterval(linkLossInterval); linkLossInterval = null; }
+            linkLossEl.classList.remove('show');
+        }
         context.addEventListener(cast.framework.system.EventType.SENDER_CONNECTED, (e) => {
             diag('SENDER_CONNECTED ' + ((e && e.senderId) || '') + ' (n=' + sendersCount() + ')');
-            if (senderLossTimer) { clearTimeout(senderLossTimer); senderLossTimer = null; }
+            cancelLinkLossCountdown();
         });
         context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, (e) => {
             const n = sendersCount();
             diag('SENDER_DISCONNECTED reason=' + ((e && e.reason) || '?') + ' (n=' + n + ')');
             if (n > 0) return;   // another sender is still attached — not our case today, but correct
-            if (senderLossTimer) clearTimeout(senderLossTimer);
-            senderLossTimer = setTimeout(() => {
-                senderLossTimer = null;
-                logError('all senders gone >' + (SENDER_LOSS_GRACE_MS / 1000) + 's — stopping the receiver');
-                try { context.stop(); } catch (err) {}
-            }, SENDER_LOSS_GRACE_MS);
+            startLinkLossCountdown();
         });
 
         // Buffering spinner. The single honest signal for "is the video actually playing" is whether
@@ -1115,6 +1169,8 @@
             capturedLoadRequest = req;   // keep the request so the decode-fallback can reload without getMediaInformation()
             // A fresh load attempt (incl. a retry): clear any prior error and arm the playback watchdog.
             awaitingPlayback = true; loadStartedAt = Date.now(); hideError();
+            // A (re)connected sender is loading media — the phone link is alive by definition.
+            cancelLinkLossCountdown();
             // Cover the video box with the poster until THIS load proves playback; reset its baseline.
             posterEl.classList.add('show');
             posterBasePos = null;
@@ -1345,10 +1401,12 @@
         // the kill-test matrix showed force-stop → SENDER_DISCONNECTED in seconds (gms actively
         // closes), but WiFi-off left an ORPHANED session playing forever. maxInactivity makes the
         // platform ping each sender connection and close unresponsive ones after this many seconds,
-        // which then raises SENDER_DISCONNECTED → the sender-loss grace timer above takes over.
-        // Total orphan teardown ≈ 15 s (platform) + 20 s (grace). Blips shorter than 15 s survive
-        // untouched; longer ones get the reconnect window of the grace timer.
-        options.maxInactivity = 15;
+        // which then raises SENDER_DISCONNECTED → the link-loss pause + 60 s countdown above takes
+        // over (v0.0.63). So a vanished phone means ≤ ~10 s of playing with frozen overlays, then an
+        // honest paused state with a visible countdown. Blips shorter than 10 s survive untouched;
+        // longer ones get the 60 s reconnect window. Lower than ~10 s risks false positives on
+        // flaky WiFi (the countdown pauses playback, so a false trip is user-visible).
+        options.maxInactivity = 10;
         context.start(options);
         dropSeekCommandBit();   // seek policy: grey the TV scrubber (best-effort) — see the SEEK interceptor
     </script>
