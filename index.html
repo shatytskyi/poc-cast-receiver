@@ -428,7 +428,7 @@
                 <div class="value" id="timerValue"></div>
             </div>
             <div id="rightPrompt">
-                <div class="cta-hint"><span class="prompt-glyph"></span><span>Tap on your phone</span></div>
+                <div class="cta-hint"><span class="prompt-glyph"></span><span id="ctaHintText">Tap on your phone</span></div>
                 <div class="cta"><span id="promptBtn"></span><span class="arrow"></span></div>
             </div>
         </div>
@@ -473,13 +473,14 @@
     <!-- Phone-link-lost warning (v0.0.63): Reboot warning-snackbar style + 60 s auto-stop countdown -->
     <div id="linkloss">
         <svg viewBox="0 0 24 24" fill="#F2DA40" aria-hidden="true"><path d="M12 2.6 23 21.4H1L12 2.6zm-1.1 6.9.3 6h1.6l.3-6h-2.2zm1.1 9.9a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5z"/></svg>
-        <span>Lost connection with phone</span>
+        <span id="linklossText">Lost connection with phone</span>
         <span class="loss-timer" id="linklossTimer">1:00</span>
     </div>
-    <!-- v0.0.65/66 = v0.0.64 content re-pushed: the v0.0.64/65 Pages runs got wedged in GitHub's
-         queue (a rerun rotted in `queued` for 1h+; a deploy step died with "try again later");
-         fresh commits force clean builds. No code changes since v0.0.64. -->
-    <div id="version">v0.0.66</div>
+    <!-- v0.0.67: localization mechanism (plan §14.2) — all user-facing texts moved into the STR
+         dictionary; the phone sends localized values in LOAD customData.strings (cast_receiver_*
+         keys from the app's Lokalise-managed strings.xml); the English literals are the fallback
+         for older sender builds. -->
+    <div id="version">v0.0.67</div>
     <div id="resinfo"></div>
 
     <script>
@@ -501,6 +502,55 @@
         const cardEl = el('card'), cardLabel = el('cardLabel'), cardTitle = el('cardTitle'), cardHint = el('cardHint'), cardHintText = el('cardHintText');
         const gateEl = el('gate');
         const errorEl = el('error'), errTitle = el('errTitle'), errSub = el('errSub'), errCode = el('errCode');
+
+        // ── MA-4513 localization (plan §14.2) ─────────────────────────────────────────────────────
+        // The receiver is locale-dumb: the PHONE resolves every user-facing text from its
+        // Lokalise-managed resources (strings.xml, cast_receiver_* keys) and sends them in the LOAD
+        // request's customData.strings ({key: localizedText}). The literals below are only the
+        // English fallback for missing keys / older sender builds. Workout & exercise titles are
+        // NOT here — they arrive backend-localized inside the overlay messages. Placeholders keep
+        // the Android format syntax (%1$s / %1$d) so the phone's strings.xml stays the single
+        // source of truth and translators may reorder arguments.
+        const STR = {
+            tapOnPhone: 'Tap on your phone',
+            continueOnPhone: 'Continue on your phone',
+            exerciseNofM: 'Exercise %1$d of %2$d',
+            nextUp: 'Next up · %1$s',
+            upNext: 'Up next',
+            preview: 'Preview',
+            rest: 'Rest',
+            catchYourBreath: 'Catch your breath',
+            getStarted: 'Get started',
+            workoutFallback: 'Workout',
+            intro: 'Intro',
+            almostDone: 'Almost done',
+            completeAction: 'Complete',
+            workoutComplete: 'Workout complete',
+            niceWork: 'Nice work 💪',
+            continueHint: 'Continue on your phone',
+            errorTitle: 'Playback error',
+            errorLoadFailed: 'The workout video failed to load on the TV.',
+            errorCantReach: 'Can’t reach the TV',
+            errorDidntStart: 'The workout video didn’t start. Check the connection and try again.',
+            linkLost: 'Lost connection with phone',
+        };
+        const str = (key) => STR[key] || '';
+        // Substitutes Android-style positional placeholders (%1$s, %2$d, …).
+        const strFmt = (pattern, ...args) =>
+            pattern.replace(/%(\d+)\$[sd]/g, (m, i) => String(args[i - 1] != null ? args[i - 1] : ''));
+        function applyStrings(map) {
+            if (!map || typeof map !== 'object') return;
+            let applied = 0;
+            for (const key in STR) {
+                if (typeof map[key] === 'string' && map[key]) { STR[key] = map[key]; applied++; }
+            }
+            // Refresh the static DOM texts; everything else re-renders from overlay messages or the
+            // show* calls, which read STR at display time.
+            el('ctaHintText').textContent = str('tapOnPhone');
+            el('gateTitle').textContent = str('continueOnPhone');
+            el('linklossText').textContent = str('linkLost');
+            diag('strings applied: ' + applied + '/' + Object.keys(STR).length);
+        }
 
         // ── MA-4513 seek policy state (header comment "Seek policy") ─────────────────────────────
         // True while the phone shows an actionable dialog (overlay actionRequired) — untagged seeks
@@ -600,26 +650,26 @@
         function renderPanels(d) {
             let eyebrow = '', title = '', sub = '';
             let rightMode = 'hidden', rightLabel = '', promptBtn = '';
-            const num = (d.exerciseNumber && d.exerciseCount) ? 'Exercise ' + d.exerciseNumber + ' of ' + d.exerciseCount : '';
+            const num = (d.exerciseNumber && d.exerciseCount) ? strFmt(str('exerciseNofM'), d.exerciseNumber, d.exerciseCount) : '';
             switch (d.phase) {
                 case 'exerciseActive':
-                    eyebrow = num; title = d.title || ''; sub = d.nextTitle ? 'Next up · ' + d.nextTitle : ''; rightMode = 'timer'; break;
+                    eyebrow = num; title = d.title || ''; sub = d.nextTitle ? strFmt(str('nextUp'), d.nextTitle) : ''; rightMode = 'timer'; break;
                 case 'exercisePreview':
-                    eyebrow = 'Up next'; title = d.title || ''; rightMode = 'label'; rightLabel = 'Preview'; break;
+                    eyebrow = str('upNext'); title = d.title || ''; rightMode = 'label'; rightLabel = str('preview'); break;
                 case 'exerciseRest':
                     // Rest: the LEFT shows "Rest" in place of the exercise name; the next exercise drops to
                     // the sub-line. Timer (ring + mm:ss) stays on the right. (The video is NOT dimmed — an
                     // earlier rest video-dim caused a compositor stall on the dongle and was removed, §5.1.)
-                    title = 'Rest'; sub = d.nextTitle ? 'Next up · ' + d.nextTitle : 'Catch your breath'; rightMode = 'timer'; break;
+                    title = str('rest'); sub = d.nextTitle ? strFmt(str('nextUp'), d.nextTitle) : str('catchYourBreath'); rightMode = 'timer'; break;
                 case 'intro':
                     // Intro is a passive phase now: while casting the workout AUTO-STARTS when the intro
                     // ends (sender-side, MA-4513), so the old "tap Start workout on your phone" prompt
                     // would ask for a tap that is no longer needed. Just name the phase, like Preview.
-                    eyebrow = 'Get started'; title = d.workoutTitle || 'Workout';
-                    rightMode = 'label'; rightLabel = 'Intro'; break;
+                    eyebrow = str('getStarted'); title = d.workoutTitle || str('workoutFallback');
+                    rightMode = 'label'; rightLabel = str('intro'); break;
                 case 'outro':
-                    eyebrow = 'Almost done'; title = d.workoutTitle || '';
-                    rightMode = 'prompt'; promptBtn = 'Complete'; break;
+                    eyebrow = str('almostDone'); title = d.workoutTitle || '';
+                    rightMode = 'prompt'; promptBtn = str('completeAction'); break;
                 default:
                     break; // completion is driven by the video ending, not a phase (see updateCard)
             }
@@ -673,9 +723,9 @@
             const show = videoEnded || currentPhase === 'completed';
             cardEl.classList.toggle('show', show);
             if (show) {
-                cardLabel.textContent = 'Workout complete';
-                cardTitle.textContent = 'Nice work 💪';
-                cardHintText.textContent = 'Continue on your phone';
+                cardLabel.textContent = str('workoutComplete');
+                cardTitle.textContent = str('niceWork');
+                cardHintText.textContent = str('continueHint');
                 cardHint.classList.remove('hide');
             }
         }
@@ -888,7 +938,7 @@
             // instead of hanging on the splash forever. showError() clears the flag so it fires once.
             if (awaitingPlayback && loadStartedAt > 0 && (Date.now() - loadStartedAt) > LOAD_TIMEOUT_MS) {
                 logError('load timeout — no playback after ' + (LOAD_TIMEOUT_MS / 1000) + 's');
-                showError('Can’t reach the TV', 'The workout video didn’t start. Check the connection and try again.', 'load timeout after ' + (LOAD_TIMEOUT_MS / 1000) + 's');
+                showError(str('errorCantReach'), str('errorDidntStart'), 'load timeout after ' + (LOAD_TIMEOUT_MS / 1000) + 's');
             }
 
             // Paused / ended / no data → hide any spinner that a prior waiting/seeking/BUFFERING left
@@ -1117,12 +1167,12 @@
                     pendingInternalReload = true;
                     if (!reloadWithCap()) {
                         pendingInternalReload = false;
-                        showError('Playback error', 'The workout video failed to load on the TV.', 'code=' + code + (extra ? '  ·  ' + extra : ''));
+                        showError(str('errorTitle'), str('errorLoadFailed'), 'code=' + code + (extra ? '  ·  ' + extra : ''));
                     }
                 }, 60);
                 return;   // retrying a shorter rung — suppress the fullscreen error for now
             }
-            showError('Playback error', 'The workout video failed to load on the TV.', 'code=' + code + (extra ? '  ·  ' + extra : ''));
+            showError(str('errorTitle'), str('errorLoadFailed'), 'code=' + code + (extra ? '  ·  ' + extra : ''));
         });
 
         // TEMP (MA-4513 error-905 probe): the Back/Home auto-stop (visibilitychange / pagehide →
@@ -1196,6 +1246,9 @@
                 if (cd) {
                     if (cd.cover) applyCover(cd.cover);
                     if (cd.audio) desiredAudioLabel = cd.audio;
+                    // Localized UI texts resolved on the phone (plan §14.2) — applied before any
+                    // overlay/error can render, so even a failed load shows a localized error card.
+                    if (cd.strings) applyStrings(cd.strings);
                 }
                 // Chapter marks for the seek policy — reset per LOAD so a stale workout's marks can
                 // never quantize the next one (internal decode-fallback reloads re-send the same
